@@ -1,17 +1,46 @@
 version: "3.9"
+
 services:
-  mongo:
-    image: mongo:latest
-    container_name: mongo
+  minio:
+    image: minio/minio:latest
+    container_name: minio
     ports:
-      - "${MONGO_PORT}:27017"
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
-      - mongo-data:/data/db
+      - ./data/minio_data:/data
+    command: server --console-address ":9001" /data
     networks:
-      - backend
+      - data-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # FIX:'mc mb -p' ignoring if bucket exists, so we use a separate container to create buckets
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      /usr/bin/mc mb -p myminio/bronze;
+      /usr/bin/mc mb -p myminio/silver;
+      /usr/bin/mc mb -p myminio/gold;
+      /usr/bin/mc mb -p myminio/mlflow-artifacts;
+      /usr/bin/mc anonymous set public myminio/mlflow-artifacts;
+      exit 0;
+      "
+    networks:
+      - data-network
 
   postgres:
     image: postgres:15
@@ -23,29 +52,81 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ./data/postgres_data:/var/lib/postgresql/data
     networks:
-      - backend
+      - data-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  etl:
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/chroma_data:/chroma/chroma
+    networks:
+      - data-network
+
+  mlflow:
     build:
       context: .
-      dockerfile: etl/Dockerfile
-    container_name: etl
+      dockerfile: Dockerfile.mlflow
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MLFLOW_ARTIFACT_ROOT: s3://mlflow-artifacts/
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
     depends_on:
-      - mongo
-      - postgres
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     networks:
-      - backend
-    volumes:
-      - ./data:/app/data
-      - ./scripts:/app/scripts
+      - data-network
+    command: >
+      mlflow server 
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      --artifacts-destination s3://mlflow-artifacts/
+      --host 0.0.0.0 
+      --port 5000
+
+  etl_runner:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: etl_runner
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+         condition: service_started
     env_file:
       - .env
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+    volumes:
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      - ./notebooks:/app/notebooks
+    networks:
+      - data-network
+    command: tail -f /dev/null 
 
 networks:
-  backend:
-
-volumes:
-  mongo-data:
-  postgres-data:
+  data-network:
+    driver: bridge
