@@ -4,6 +4,8 @@ import chromadb
 from chromadb.utils import embedding_functions
 import sys
 from deltalake import DeltaTable
+from transformers import pipeline
+import pandas as pd
 
 # utils for bring up Spark (deltatable instead of fallback to Spark for reading delta)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +24,14 @@ def get_chroma_client():
 
 def run_silver_to_gold():
     logging.info("Starting Gold Layer Process")
+    
+    try:
+        logging.info("loading FinBERT")
+        sentiment_pipeline = pipeline("text-classification", model="ProsusAI/finbert")
+    except Exception as e:
+        logging.error(f"error: {e}")
+        return
+    
     # reading deltalake from raw python (faster for inference than spark)
     silver_path = "s3://silver/articles_delta/"
     
@@ -57,6 +67,15 @@ def run_silver_to_gold():
         df['text_blob'] = df['title'].fillna('') + ". " + df['description'].fillna('')
         df = df[df['text_blob'].str.len() > 10].copy()
 
+        logging.info("sentiment analysis")
+        titles = df['title'].fillna("").astype(str).tolist()
+        results = sentiment_pipeline(titles, truncation=True, max_length=512)
+
+        df['sentiment'] = [r['label'] for r in results]
+        df['sentiment_score'] = [r['score'] for r in results]
+        
+        logging.info(f"sentiment calculated. EXAMPLE: {df[['title', 'sentiment']].head(1).values}")
+        
         client = get_chroma_client()
         # baseline all-MiniLM-L6-v2
         ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
@@ -78,20 +97,26 @@ def run_silver_to_gold():
             ids = batch['article_id'].tolist()
             documents = batch['text_blob'].tolist()
 
-            # # Convert metadata to native Python types (Chroma doesnt support numpy types or Timestamp)
-            metadatas = batch[['source', 'url', 'title']].to_dict(orient='records')
-            dates = batch['published_at'].astype(str).tolist()
-            
-            for idx, meta in enumerate(metadatas):
-                meta['published_at'] = dates[idx]
-
+            metadatas = []
+            for _, row in batch.iterrows():
+                metadatas.append({
+                    "source": row['source'],
+                    "url": row['url'],
+                    "title": row['title'],
+                    "published_at": str(row['published_at']),
+                    "sentiment": row['sentiment'], # positive, negative, neutral
+                    "sentiment_score": float(row['sentiment_score'])
+                })
+                
             collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
-            logging.info(f"Indexed {i + len(batch)}/{total_docs}")
+            logging.info(f"indexed: {i + len(batch)} / {total_docs}")
 
         logging.info(f"Gold layer completd {total_docs} embeddings in ChromaDB.")
 
     except Exception as e:
         logging.error(f"error with vectorization: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     run_silver_to_gold()

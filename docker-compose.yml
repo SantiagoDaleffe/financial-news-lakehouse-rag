@@ -126,6 +126,26 @@ services:
     networks:
       - data-network
     command: tail -f /dev/null 
+  
+  dashboard:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: dashboard
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      - chromadb
+    networks:
+      - data-network
+    command: streamlit run app/dashboard.py --server.port 8501 --server.address 0.0.0.0
 
 networks:
   data-network:

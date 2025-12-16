@@ -17,3 +17,9 @@ sentence-transformers
 deltalake
 python-dotenv
 tqdm
+streamlit
+plotly
+watchdog
+yfinance 
+transformers
+torch
