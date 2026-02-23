@@ -1,0 +1,63 @@
+services:
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_LOGS=warning
+
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - rabbitmq
+      - minio
+      - mlflow
+    environment:
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - GIT_PYTHON_REFRESH=quiet
+
+  worker:
+    build: ./worker
+    depends_on:
+      - rabbitmq
+      - minio
+    environment:
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
+  
+  chromadb:
+    image: chromadb/chroma:0.4.24
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./chroma_data:/chroma/chroma
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./minio_data:/data
+    command: server /data --console-address ":9001"
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.2
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow_data:/mlflow_data
+    command: mlflow server --host 0.0.0.0 --backend-store-uri sqlite:///mlflow_data/mlflow.db
+  
+
