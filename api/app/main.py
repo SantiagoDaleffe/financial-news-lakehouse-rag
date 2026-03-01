@@ -43,7 +43,7 @@ while True:
         print(f"Connection failed: {e}. Retrying in 5 seconds...", flush=True)
         time.sleep(5)
 
-collection = chroma_client.get_or_create_collection(name="news_collection")
+collection = chroma_client.get_or_create_collection(name="fin_news_v1")
 
 print("Loading SentenceTransformer model...", flush=True)
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
@@ -100,24 +100,36 @@ async def search_news(query:str):
     embedding = model.encode(query).tolist()
     results = collection.query(
         query_embeddings=[embedding],
-        n_results=2
+        n_results=5
     )
     
     docs = results["documents"][0]
     if not docs:
-        return {"respuesta": "No encontré noticias en la base de datos para responder a esto."}
+        return {"Response": "I don't have enough information in my database."}
     
-    context = "\n- ".join(docs)
+    documents = results['documents'][0]
+    metadatas = results['metadatas'][0]
+    
+    context = "\n- ".join(documents)
     prompt = f"""
-    Sos un asistente financiero experto. 
-    Basándote ÚNICAMENTE en las siguientes noticias de contexto, respondé la pregunta del usuario.
-    Si la respuesta no está en las noticias, decí "No tengo información suficiente en mi base de datos".
-    No inventes datos.
-    CONTEXTO (Noticias):
+    You are a financial AI assistant.
+    Based ONLY on the following news context, answer the user's question.
+    If the answer is not in the context, say "I don't have enough information".
+    Don't make up answers.
+    Context(News):
     - {context}
 
-    PREGUNTA DEL USUARIO: {query}
+    Question: {query}
     """
+    sources_data = []
+    for doc, meta in zip(documents, metadatas):
+        safe_meta = meta or {}
+        
+        sources_data.append({
+            'text': doc,
+            'sentiment': safe_meta.get('sentiment', 'unknown'),
+            'sentiment_score': safe_meta.get('sentiment_score', 0.0)
+        })
     
     start = time.time()
     response = await llm.generate_content_async(prompt)
@@ -134,7 +146,7 @@ async def search_news(query:str):
     return{
         "query": query,
         "response": response.text,
-        "sources": docs
+        "sources": sources_data
     }
 
 @app.get('/database-info')

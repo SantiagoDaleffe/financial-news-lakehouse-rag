@@ -1,33 +1,22 @@
-# Ignore all files ending with .log
-*.log
-
-# Ignore a specific file named "temp.file" in the root directory
-/temp.file
-
-# Ignore the entire "build/" directory and all its contents
-build/
-
-# Ignore all files in the "docs/" directory but not the directory itself
-docs/*
-
-# Do not ignore "docs/important.txt" even if the above pattern would
-!docs/important.txt
-
-# Ignore all files named ".DS_Store" anywhere in the repository (macOS files)
-.DS_Store
-
-# Ignore the virtual environment folder common in Python projects
+# Env and secrets
 .venv/
 .env
 
-# Ignore compiled Python files
+# Python
 __pycache__/
 *.pyc
 
-# Ignore Node.js dependency folder
-node_modules/
-
-bitcoin_wiki.txt
+# Docker volumes
 chroma_data/
 minio_data/
 mlflow_data/
+airflow_data/
+
+# Airflow folders
+logs/
+plugins/
+
+# Old or static files
+bitcoin_wiki.txt
+*.log
+.DS_Store
