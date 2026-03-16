@@ -7,22 +7,22 @@ import hashlib
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from transformers import pipeline
 
-print("Loading SentenceTransformer model...", flush=True)
+print("loading sentence transformer model...", flush=True)
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
-print("Loading Sentiment model...", flush=True)
+print("loading finbert sentiment model...", flush=True)
 sentiment_model = pipeline('text-classification', model='ProsusAI/finbert')
 
-print("Connecting to ChromaDB...", flush=True)
+print("connecting to chromadb...", flush=True)
 chroma_client = chromadb.HttpClient(host='chromadb', port=8000)
 
 while True:
     try:
         chroma_client.heartbeat()
-        print("Connected to ChromaDB!", flush=True)
+        print("connected to chromadb ok", flush=True)
         break
     except Exception as e:
-        print(f"Connection failed: {e}. Retrying in 5 seconds...", flush=True)
+        print("chromadb connection failed retrying in 5s...", str(e), flush=True)
         time.sleep(5)
 
 collection = chroma_client.get_or_create_collection(name="fin_news_v1")
@@ -33,12 +33,12 @@ params = pika.URLParameters(url)
 connection = None
 while True:
     try:
-        print("Trying to connect to RabbitMQ...", flush=True)
+        print("connecting to rabbitmq...", flush=True)
         connection = pika.BlockingConnection(params)
-        print("Connected to RabbitMQ!")
+        print("connected to rabbitmq ok")
         break
     except pika.exceptions.AMQPConnectionError as e:
-        print(f"Connection failed: {e}. Retrying in 5 seconds...", flush=True)
+        print("rabbitmq connection failed retrying in 5s...", str(e), flush=True)
         time.sleep(5)
         
 channel = connection.channel()
@@ -53,7 +53,7 @@ text_splitter = RecursiveCharacterTextSplitter(
 def callback(ch, method, properties, body):
     text = body.decode()
     chunks = text_splitter.split_text(text)
-    print(f"Received text, split into {len(chunks)} chunks. Processing first chunk...", flush=True)
+    print("received text split into", len(chunks), "chunks processing...", flush=True)
     
     batch_embeddings = []
     batch_documents = []
@@ -68,7 +68,7 @@ def callback(ch, method, properties, body):
             sentiment_label = sent_result['label']
             sentiment_score = sent_result['score']
         except Exception as e:
-            print(f'Error analyzing sentiment: {e}')
+            print("error analyzing sentiment fallback to unknown", str(e), flush=True)
             sentiment_label = 'UNKNOWN'
             sentiment_score = 0.0
             
@@ -90,10 +90,10 @@ def callback(ch, method, properties, body):
         ids=batch_ids
     )
     
-    print(f"Processed and stored {len(batch_ids)} chunks with sentiment analysis", flush=True)
+    print("stored", len(batch_ids), "chunks with sentiment data in chromadb", flush=True)
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 channel.basic_consume(queue="news_queue", on_message_callback=callback, auto_ack=False)
 
-print("Waiting for messages. To exit press CTRL+C", flush=True)
+print("worker ready waiting for messages...", flush=True)
 channel.start_consuming()

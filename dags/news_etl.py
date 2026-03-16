@@ -1,13 +1,12 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.utils.dates import days_ago
 from datetime import datetime, timedelta
 import requests
 import json
 import os
 
 API_KEY = os.getenv("NEWS_API_KEY")
-INGESTION_URL = os.getenv("INGESTION_API_URL", "http://api:8000/ingest")
+INGESTION_URL = os.getenv("INGESTION_API_URL", "http://api:8000/api/v1/ingest")
 
 default_args = {
     "owner": "airflow",
@@ -17,7 +16,6 @@ default_args = {
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
-
 
 def parse_articles(articles_list):
     parsed_articles = []
@@ -35,26 +33,24 @@ def parse_articles(articles_list):
         parsed_articles.append(parse)
     return parsed_articles
 
-
 def extract_and_ingest(limit=50):
     if not API_KEY:
-        raise Exception("NEWS_API_KEY environment variable is not set.")
+        raise Exception("missing NEWS_API_KEY in env")
 
     yesterday = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-
     url = f"https://newsapi.org/v2/everything?q=Bitcoin&from={yesterday}&sortBy=publishedAt&pageSize={limit}&apiKey={API_KEY}"
 
-    print(f"Fetching news from: {url.replace(API_KEY, '***')}")
+    print("fetching news from api...", flush=True)
     response = requests.get(url)
+    
     if response.status_code == 200:
         raw_articles = response.json().get("articles", [])
         clean_articles = parse_articles(raw_articles)
-        print(f"Fetched {len(clean_articles)} articles, ingesting to API...")
+        print("fetched", len(clean_articles), "articles. sending to ingestion api...", flush=True)
 
         count = 0
         for article in clean_articles:
             embedd = f"TITLE: {article['title']}. DESCRIPTION: {article['description']}. DATE: {article['publishedAt']}. URL: {article['url']}"
-
             payload = {"text": embedd}
 
             try:
@@ -62,26 +58,23 @@ def extract_and_ingest(limit=50):
                 if r.status_code == 200:
                     count += 1
             except Exception as e:
-                print(f"Error ingesting article: {e}")
+                print("error posting article to api", str(e), flush=True)
 
-        return f"Ingested {count} articles successfully."
+        return f"ingested {count} articles ok"
     else:
-        raise Exception(
-            f"Failed to fetch news: {response.status_code} - {response.text}"
-        )
-
+        raise Exception(f"failed fetching news status {response.status_code} {response.text}")
 
 with DAG(
     dag_id="news_etl_pipeline",
     default_args=default_args,
-    description="Daily ETL pipeline for news articles",
+    description="daily etl pulling crypto news",
     schedule="0 8 * * *",
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["ingestion", "crypto"],
 ) as dag:
     ingest_task = PythonOperator(
-        task_id="News_ingest",
+        task_id="news_ingest",
         python_callable=extract_and_ingest,
         op_kwargs={"limit": 20},
     )

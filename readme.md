@@ -12,7 +12,9 @@ This project implements a decoupled microservices architecture prioritizing scal
 4. **Processing Worker:** Asynchronous workers consume the queue, perform text chunking, calculate embeddings (MiniLM), and score financial sentiment (**FinBERT**).
 5. **Vector Database:** Embeddings and metadata are stored in **ChromaDB**, utilizing cryptographic hashing to ensure idempotency and prevent duplicate chunks.
 6. **LLM & Observability:** The search endpoint queries ChromaDB, builds the prompt context, and streams the response via **Gemini 1.5 Flash**. Every prompt and latency metric is tracked via **MLflow**.
-7. **Frontend:** A **Streamlit** dashboard provides a user-friendly chat interface displaying LLM reasoning alongside source attribution and sentiment confidence scores.
+7. **Agent Tools (Function Calling):** The LLM leverages **Gemini 1.5 Flash** as the advanced reasoning engine, which executes functions in real-time. Beyond text generation, it performs dynamic queries to external financial APIs (**Yahoo Finance**), executes mathematical computations, and retrieves live market data to provide contextually accurate intelligence.
+8. **Alert Worker & Telegram Integration:** An asynchronous time-oriented worker crosses alert conditions from **PostgreSQL** with real-time prices, triggering push notifications via **Telegram** to subscribers whenever trading signals are matched.
+9. **Frontend (Multi-repo Architecture):** The backend exposes a **REST API** with **CORS** enabled at `http://localhost:8000`, ready for consumption by external clients. The frontend is decoupled as a separate repository (e.g., **Next.js**), enabling independent scaling and deployment of the client-side application.
 
 ## Tech Stack
 
@@ -41,9 +43,8 @@ This project implements a decoupled microservices architecture prioritizing scal
     docker-compose up -d --build
     ```
 5. Trigger the initial data load by navigating to Airflow (http://localhost:8080), logging in (admin/admin), and triggering the news_etl_pipeline DAG.
-6. Access the Streamlit Agent Interface at http://localhost:8501.
+6. The REST API will be available at http://localhost:8000/docs, where you can view the complete OpenAPI specification and interact with all available endpoints.
 
 ## Future Optimizations
 
 * **Change Data Capture (CDC)**: Implement a state-tracking database table prior to the vectorization queue to avoid re-inferencing previously processed news, optimizing compute costs.
-* **Kubernetes Migration**: Refactor the docker-compose.yml into Helm charts for K8s deployment with Horizontal Pod Autoscaling for the ML Workers.
