@@ -63,3 +63,85 @@ def set_price_alert(ticker: str, target_price: float, condition: str, user_id: s
         return {"error": f"db error saving alert: {str(e)}"}
     finally:
         db.close()
+        
+def get_user_alerts(user_id: str) -> dict:
+    """
+    Fetches all active price alerts for the current user.
+    Use this to see what alerts the user has before modifying or deleting them.
+    args:
+        user_id: the ID of the current user
+    """
+    db = SessionLocal()
+    try:
+        alerts = db.query(PriceAlert).filter(
+            PriceAlert.user_id == user_id,
+            PriceAlert.status == "active"
+        ).all()
+        
+        if not alerts:
+            return {"message": "No active alerts found."}
+            
+        return {
+            "alerts": [
+                {"id": a.id, "ticker": a.ticker, "target_price": a.target_price, "condition": a.condition} 
+                for a in alerts
+            ]
+        }
+    except Exception as e:
+        return {"error": f"Database error: {str(e)}"}
+    finally:
+        db.close()
+
+def update_price_alert(alert_id: int, new_target_price: float, user_id: str) -> dict:
+    """
+    Updates the target price of an existing alert.
+    args:
+        alert_id: the ID of the alert to modify
+        new_target_price: the new numeric price target
+        user_id: the ID of the current user
+    """
+    db = SessionLocal()
+    try:
+        alert = db.query(PriceAlert).filter(
+            PriceAlert.id == alert_id,
+            PriceAlert.user_id == user_id,
+            PriceAlert.status == "active"
+        ).first()
+        
+        if not alert:
+            return {"error": f"Alert {alert_id} not found or doesn't belong to you."}
+            
+        alert.target_price = float(new_target_price)
+        db.commit()
+        return {"message": f"Alert {alert_id} updated. New target price: {new_target_price}"}
+    except Exception as e:
+        db.rollback()
+        return {"error": f"Database error: {str(e)}"}
+    finally:
+        db.close()
+
+def delete_price_alert(alert_id: int, user_id: str) -> dict:
+    """
+    Cancels/deletes an active price alert.
+    args:
+        alert_id: the ID of the alert to delete
+        user_id: the ID of the current user
+    """
+    db = SessionLocal()
+    try:
+        alert = db.query(PriceAlert).filter(
+            PriceAlert.id == alert_id,
+            PriceAlert.user_id == user_id
+        ).first()
+        
+        if not alert:
+            return {"error": f"Alert {alert_id} not found or doesn't belong to you."}
+            
+        alert.status = "cancelled"
+        db.commit()
+        return {"message": f"Alert {alert_id} cancelled successfully."}
+    except Exception as e:
+        db.rollback()
+        return {"error": f"Database error: {str(e)}"}
+    finally:
+        db.close()

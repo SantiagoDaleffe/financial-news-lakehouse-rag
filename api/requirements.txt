@@ -15,3 +15,4 @@ yfinance
 psycopg2-binary
 sqlalchemy
 requests
+PyJWT==2.8.0

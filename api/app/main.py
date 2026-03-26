@@ -3,9 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
 import os
 from dotenv import load_dotenv
-
 from .models import Base
-from .routers import ingestion, agent, system
+from .routers import ingestion, agent, system, alerts, research, chats
 
 load_dotenv()
 
@@ -26,3 +25,6 @@ app.add_middleware(
 app.include_router(system.router)
 app.include_router(ingestion.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
+app.include_router(alerts.router, prefix="/api/v1/alerts")
+app.include_router(research.router, prefix="/api/v1/research")
+app.include_router(chats.router, prefix="/api/v1/chats")

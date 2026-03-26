@@ -13,9 +13,14 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - rabbitmq
-      - minio
-      - mlflow
+      rabbitmq:
+        condition: service_started
+      minio:
+        condition: service_started
+      mlflow:
+        condition: service_started
+      airflow-postgres:
+        condition: service_healthy
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
       - GEMINI_API_KEY=${GEMINI_API_KEY}
