@@ -53,7 +53,7 @@ async def chat(
     )
 
     ai_response, sources = await run_agent_with_history(
-        request.message, message_history, user_id
+        request.message, message_history, user_id, request.model_override
     )
 
     ai_message = Message(

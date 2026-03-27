@@ -46,3 +46,6 @@ class Message(Base):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[int] = None
+    model_override: Optional[str] = None
+    
+

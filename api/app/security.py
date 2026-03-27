@@ -1,33 +1,44 @@
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import jwt
 import os
+from datetime import datetime, timedelta
 
-security = HTTPBearer()
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-# Esta clave es vital. Tiene que ser LA MISMA que use el frontend (Supabase, Auth0, etc.)
-# Nunca se hardcodea, siempre va al .env
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "clave-secreta-de-prueba-para-local")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "secret_key")
 ALGORITHM = "HS256"
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+router = APIRouter(tags=["auth"])
+
+@router.post("/login")
+def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     """
-    Valida el token JWT y devuelve el user_id. 
-    Si el token es falso o expiró, corta la petición automáticamente.
+    Native endpoint for Swagger and the frontend to generate the JWT token.
     """
-    token = credentials.credentials
+    if form_data.username == "admin" and form_data.password == "admin":
+        payload = {
+            "sub": "default_user",
+            "exp": datetime.utcnow() + timedelta(days=1)
+        }
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        return {"access_token": token, "token_type": "bearer"}
+        
+    raise HTTPException(
+        status_code=401,
+        detail="Incorrect password or user",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+    """Valida el token en cada petición protegida."""
     try:
-        # Desencriptamos el token usando nuestra palabra secreta
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        
-        # 'sub' (subject) es el estándar internacional en JWT para el ID de usuario
-        user_id = payload.get("sub") 
+        user_id = payload.get("sub")
         if user_id is None:
-            raise HTTPException(status_code=401, detail="Token inválido: falta el usuario")
-            
+            raise HTTPException(status_code=401, detail="Invalid Token")
         return str(user_id)
-        
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="El token expiró. Volvé a iniciar sesión.")
+        raise HTTPException(status_code=401, detail="Expired Token")
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Credenciales inválidas o token falsificado.")
+        raise HTTPException(status_code=401, detail="Invalid Token")

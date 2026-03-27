@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+import numpy as np
 import chromadb
 from sentence_transformers import SentenceTransformer
 import os
@@ -44,6 +45,46 @@ collection = chroma_client.get_or_create_collection(name="fin_news_v1")
 
 print("loading sentence transformer model...", flush=True)
 model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+COMPLEX_PROTOTYPES = [
+    "do a comparative analysis",
+    "what is the correlation between",
+    "explain the financial impact",
+    "detailed market summary",
+    "what does this mean for my investments",
+    "future projection of the company",
+    "give me your opinion on the balance sheet",
+    "why is the market crashing",
+    "assess the credit risk of this portfolio",
+    "what are the macroeconomic factors affecting this stock"
+]
+
+SIMPLE_PROTOTYPES = [
+    "hello",
+    "tesla price",
+    "delete alert",
+    "thank you",
+    "create alert",
+    "how many shares do I have",
+    "cancel my notification",
+    "how are you",
+    "what is the value of btc",
+    "goodbye"
+]
+
+complex_embeddings = model.encode(COMPLEX_PROTOTYPES)
+simple_embeddings = model.encode(SIMPLE_PROTOTYPES)
+
+def get_routing_complexity(query:str) -> str:
+    """
+    Calculates semantic similarity between the prompt and the prototypes
+    for fallback selection.
+    """
+    query_emb = model.encode([query])[0]
+    complex_score = np.max(np.dot(complex_embeddings, query_emb) / (np.linalg.norm(complex_embeddings, axis=1) * np.linalg.norm(query_emb)))
+    simple_score = np.max(np.dot(simple_embeddings, query_emb) / (np.linalg.norm(simple_embeddings, axis=1) * np.linalg.norm(query_emb)))
+    
+    return "complex" if complex_score > simple_score else "simple"    
 
 
 @router.get("/search")
@@ -103,7 +144,7 @@ async def search_news(query: str):
     return {"query": query, "response": response.text, "sources": sources_data}
 
 
-async def run_agent_with_history(query: str, message_history, user_id: str):
+async def run_agent_with_history(query: str, message_history, user_id: str, model_override: str = None):
     """
     Fetches fresh context from ChromaDB, formats the database history for Gemini,
     and generates a response with memory and updated data, injected with user context.
@@ -159,25 +200,58 @@ async def run_agent_with_history(query: str, message_history, user_id: str):
         delete_price_alert
     ],
     temperature=0.0,
-    # Usamos comillas triples para que el string pueda tener saltos de línea
     system_instruction=f"""You are an Autonomous Financial Assistant. You have access to a local news database (RAG Context) and external tools. 
     IMPORTANT: The current user's ID is '{user_id}'. 
     You must use this EXACT ID when calling any tool that requires a user_id parameter. Never ask the user for their ID."""
 )
+    if model_override:
+        complexity = "manual_override"
+        model_cascade = [model_override]
+    else:
+        complexity = get_routing_complexity(query)
+        
+        if complexity == 'complex':
+            model_cascade = ["gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview"]
+        else:
+            model_cascade = ["gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
+        
+    print(f'Model chosen: {complexity}. Cascade: {model_cascade}', flush=True)
 
     start = time.time()
-    chat = client.aio.chats.create(
-        model="gemini-3-flash-preview", config=dynamic_config, history=gemini_history
-    )
-
-    response = await chat.send_message(enriched_prompt)
+    response_text=None
+    model_used=None
+    
+    for model_name in model_cascade:
+        try:
+            print(f'Trying inference with {model_name}...', flush=True)
+            chat= client.aio.chats.create(
+                model=model_name,
+                config=dynamic_config,
+                history=gemini_history
+            )
+            response = await chat.send_message(enriched_prompt)
+            response_text = response.text
+            model_used = model_name
+            break
+        
+        except Exception as e:
+            print(f'[FALLBACK] Error with {model_name}: {e}.', flush=True)
+            continue
+    
+    
     latency = time.time() - start
+    
+    if not response_text:
+        response_text = "Too many requests. Try again later."
+        model_used = "failed_all"
+        
 
     with mlflow.start_run(run_name="chat_with_history"):
         mlflow.log_param("query", query)
         mlflow.log_metric("latency_seconds", latency)
         mlflow.log_param("history_length", len(gemini_history))
-        mlflow.set_tag("model_version", "gemini-3-flash-preview")
-        mlflow.set_tag("architecture", "RAG + Agents + History")
+        mlflow.log_param("routing_complexity", complexity)
+        mlflow.set_tag("model_version", model_used)
+        mlflow.set_tag("architecture", "RAG + Agents + Tools + Semantic Routing")
 
     return response.text, sources_data
