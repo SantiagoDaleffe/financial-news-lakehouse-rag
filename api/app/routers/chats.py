@@ -1,12 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from ..models import ChatRequest, Conversation, Message
+from ..models import ChatRequest, Conversation, Message, User
 from ..security import get_current_user
 from .alerts import get_db
 from .agent import run_agent_with_history
 
 router = APIRouter(tags=["chat"])
 
+MODEL_COSTS = {
+    "gemini-3.1-pro-preview": 5.0,
+    "gemini-2.5-pro": 3.0,
+    "gemini-3-flash-preview": 1.0,
+    "gemini-3.1-flash-lite": 0.5,
+    "gemini-2.5-flash-lite": 0.5,
+}
 
 @router.post("/")
 async def chat(
@@ -15,8 +22,22 @@ async def chat(
     db: Session = Depends(get_db),
 ):
     """
-    Processes chat messages, maintains conversation history, and generates AI responses with context.
+    Processes chat messages, maintains conversation history, generates AI responses,
+    and manages user credits.
     """
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    # DEV
+    if not user:
+        user = User(id=user_id, email=f"{user_id}@test.com", credits=100.0)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        
+    if user.credits <= 0:
+        raise HTTPException(status_code=402, detail='Insufficient tokens to perform the query.')
+    
+    
     if not request.conversation_id:
         new_conversation = Conversation(
             user_id=user_id, title=request.message[:40] + "..."
@@ -33,6 +54,7 @@ async def chat(
         )
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        
 
     new_message = Message(
         conversation_id=conversation_id,
@@ -52,9 +74,15 @@ async def chat(
         .all()
     )
 
-    ai_response, sources = await run_agent_with_history(
+    ai_response, sources, is_cached, model_used = await run_agent_with_history(
         request.message, message_history, user_id, request.model_override
     )
+    
+    cost = 0.0
+    if not is_cached and model_used != 'failed_all':
+        cost = MODEL_COSTS.get(model_used, 1.0)
+        
+    user.credits -= cost
 
     ai_message = Message(
         conversation_id=conversation_id,
@@ -69,4 +97,7 @@ async def chat(
         "conversation_id": conversation_id,
         "response": ai_response,
         "sources": sources,
+        "is_cached": is_cached,
+        'model_used': model_used,
+        'credits_remaining': user.credits
     }

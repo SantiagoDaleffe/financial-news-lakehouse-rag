@@ -95,7 +95,9 @@ services:
       retries: 5
 
   airflow-init:
-    image: apache/airflow:2.8.1
+    build: 
+      context: ./airflow
+      dockerfile: Dockerfile.airflow
     environment:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
@@ -107,7 +109,9 @@ services:
       bash -c " airflow db migrate && airflow users create --username admin --firstname Santiago --lastname Daleffe --role Admin --email admin@example.com --password admin "
 
   airflow:
-    image: apache/airflow:2.8.1
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile.airflow
     ports:
       - "8080:8080"
     environment:
@@ -128,3 +132,14 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@test.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy

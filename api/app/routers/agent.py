@@ -3,6 +3,7 @@ import numpy as np
 import chromadb
 from sentence_transformers import SentenceTransformer
 import os
+import _hashlib
 import time
 import mlflow
 from google import genai
@@ -15,6 +16,7 @@ from ..agent_tools import (
     update_price_alert, 
     delete_price_alert
 )
+from ..semantic_cache import SemanticCache
 
 router = APIRouter(tags=["agent"])
 
@@ -45,6 +47,7 @@ collection = chroma_client.get_or_create_collection(name="fin_news_v1")
 
 print("loading sentence transformer model...", flush=True)
 model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+cache = SemanticCache(chroma_client, model)
 
 COMPLEX_PROTOTYPES = [
     "do a comparative analysis",
@@ -149,6 +152,21 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
     Fetches fresh context from ChromaDB, formats the database history for Gemini,
     and generates a response with memory and updated data, injected with user context.
     """
+    is_cached = False
+    
+    transactional_keywords = ['alert', 'create', 'delete', 'notify', 'my', 'have', 'account'] 
+    
+    is_transactional = any(word in query.lower() for word in transactional_keywords)
+    
+    if not is_transactional:
+        cached_response = cache.check(query, threshold=0.15, ttl_seconds=300)
+        if cached_response:
+            is_cached = True
+            return cached_response, [], is_cached, 'cache_hit'
+    
+    else:
+        print('Transactional query detected. Avoiding semantic caching for security.', flush=True)
+    
     embedding = model.encode(query).tolist()
     results = collection.query(query_embeddings=[embedding], n_results=5)
 
@@ -200,9 +218,10 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
         delete_price_alert
     ],
     temperature=0.0,
-    system_instruction=f"""You are an Autonomous Financial Assistant. You have access to a local news database (RAG Context) and external tools. 
-    IMPORTANT: The current user's ID is '{user_id}'. 
-    You must use this EXACT ID when calling any tool that requires a user_id parameter. Never ask the user for their ID."""
+    system_instruction=f"""You are an Autonomous Financial Assistant. You have access to a local news database (RAG Context) and external tools.
+    CRITICAL RULES:
+    1. If the user asks for current prices, calculations, or alerts, YOU MUST USE THE TOOLS. Do not rely on local news for live prices.
+    2. The current user's ID is '{user_id}'. You must use this EXACT ID when calling any tool that requires a user_id parameter. Never ask the user for their ID."""
 )
     if model_override:
         complexity = "manual_override"
@@ -245,7 +264,9 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
         response_text = "Too many requests. Try again later."
         model_used = "failed_all"
         
-
+    if response_text and model_used != "failed_all" and not is_transactional:
+        cache.save(query, response_text)
+        
     with mlflow.start_run(run_name="chat_with_history"):
         mlflow.log_param("query", query)
         mlflow.log_metric("latency_seconds", latency)
@@ -254,4 +275,4 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
         mlflow.set_tag("model_version", model_used)
         mlflow.set_tag("architecture", "RAG + Agents + Tools + Semantic Routing")
 
-    return response.text, sources_data
+    return response_text, sources_data, is_cached, model_used
