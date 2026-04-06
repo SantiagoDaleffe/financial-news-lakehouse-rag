@@ -2,6 +2,7 @@ import pika
 import os
 import time
 import chromadb
+import json
 from sentence_transformers import SentenceTransformer
 import hashlib
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -51,7 +52,16 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 
 def callback(ch, method, properties, body):
-    text = body.decode()
+    try:
+        payload = json.loads(body.decode())
+        text = payload.get("text", "")
+        published_at = payload.get("published_at", 0.0)
+        news_url = payload.get("url", "")
+    except Exception as e:
+        print("Error parsing JSON from RabbitMQ:", str(e), flush=True)
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
+
     chunks = text_splitter.split_text(text)
     print("received text split into", len(chunks), "chunks processing...", flush=True)
     
@@ -79,8 +89,10 @@ def callback(ch, method, properties, body):
         
         batch_metadatas.append({
             'source': 'news_api',
-            "sentiment": sentiment_label,
-            "sentiment_score": float(sentiment_score)
+            'url': news_url,
+            'published_at': float(published_at),
+            'sentiment': sentiment_label,
+            'sentiment_score': float(sentiment_score)
         })
     
     collection.add(

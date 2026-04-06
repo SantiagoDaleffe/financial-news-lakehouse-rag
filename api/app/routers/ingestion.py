@@ -5,7 +5,9 @@ import boto3
 import json
 import os
 import hashlib
+import time
 from datetime import datetime
+import chromadb
 
 router = APIRouter(tags=["ingestion"])
 
@@ -20,14 +22,20 @@ s3_client = boto3.client(
 bucket_name = 'data-lake'
 rabbitmq_url = os.getenv('RABBITMQ_URL')
 
+print("Connecting to ChromaDB...", flush=True)
+chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
+collection = chroma_client.get_or_create_collection(name="fin_news_v1")
+
 class NewsItem(BaseModel):
     text: str
-
+    published_at: float 
+    url: str
+    
 @router.post('/ingest')
 def ingest_news(item: NewsItem):
     """
-    Receives raw text, stores it as a JSON payload in S3, 
-    and publishes a message to RabbitMQ for async processing.
+    receives the structured news, saves a backup in S3,
+    and enqueues it in RabbitMQ (in JSON format) for asynchronous processing.
     """
     try:
         s3_client.head_bucket(Bucket=bucket_name)
@@ -40,16 +48,18 @@ def ingest_news(item: NewsItem):
     
     s3_key = f"raw/news/{today.year}/{today.month:02d}/{today.day:02d}/doc_{file_hash}.json"
     
-    payload = {
-        "text": item.text,
-        'ingested_at': today.isoformat(),
-        'source': 'api_ingestion'
-    }
+    payload_s3 = {
+            "text": item.text,
+            "url": item.url,
+            "published_at": item.published_at,
+            "ingested_at": today.isoformat(),
+            "source": "api_ingestion"
+        }
     
     s3_client.put_object(
         Bucket=bucket_name,
         Key=s3_key,
-        Body=json.dumps(payload),
+        Body=json.dumps(payload_s3),
         ContentType='application/json'
     )
     
@@ -59,7 +69,22 @@ def ingest_news(item: NewsItem):
     connection = pika.BlockingConnection(params)
     channel = connection.channel()
     channel.queue_declare(queue='news_queue', durable=True)
-    channel.basic_publish(exchange='', routing_key='news_queue', body=item.text)
+    channel.basic_publish(exchange='', routing_key='news_queue', body=item.model_dump_json())
     connection.close()
     
     return {'status': 'queued'}
+
+@router.delete('/prune')
+def prune_old_news(days: int = 30):
+    """
+    Physically removes all vectors older than 'days' from ChromaDB.
+    Ideal for calling from a maintenance Airflow DAG.
+    """
+    
+    cutoff_timestamp = time.time() - (days * 86400)
+    collection.delete(
+        where={"published_at": {"$lt": cutoff_timestamp}}
+    )
+    print(f"Purge completed: News older than {days} days has been removed.", flush=True)
+    return {"status": "ok", "deleted_older_than_days": days}
+
