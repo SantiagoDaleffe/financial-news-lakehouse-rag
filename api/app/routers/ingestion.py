@@ -83,7 +83,7 @@ def ingest_news(item: NewsItem):
 @router.delete('/prune')
 def prune_old_news(days: int = 30):
     """
-    Elimina físicamente de ChromaDB todos los vectores que sean más antiguos que 'days'.
+    Physically remove from ChromaDB all vectors older than 'days'.
     """
     cutoff_timestamp = time.time() - (days * 86400)
     
@@ -94,6 +94,6 @@ def prune_old_news(days: int = 30):
         where={"published_at": {"$lt": cutoff_timestamp}}
     )
     
-    print(f"🗑️ Purga completada: Eliminadas noticias más antiguas que {days} días.", flush=True)
+    print(f"Purge completed: News older than {days} days has been removed.", flush=True)
     return {"status": "ok", "deleted_older_than_days": days}
 

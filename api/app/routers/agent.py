@@ -3,7 +3,6 @@ import numpy as np
 import chromadb
 from sentence_transformers import SentenceTransformer
 import os
-import _hashlib
 import time
 import mlflow
 from google import genai
@@ -26,12 +25,6 @@ mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 mlflow.set_experiment("rag_search_experiment")
 
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
-
-agent_config = types.GenerateContentConfig(
-    tools=[get_live_stock_price, calculate_math, set_price_alert],
-    temperature=0.0,
-    system_instruction="You are an Autonomous Financial Assistant. You have access to a local news database (RAG Context) and external tools. If the request requires live market data or precise math calculations, use the available tools.",
-)
 
 print("connecting to chromadb...", flush=True)
 chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
@@ -90,64 +83,6 @@ def get_routing_complexity(query:str) -> str:
     simple_score = np.max(np.dot(simple_embeddings, query_emb) / (np.linalg.norm(simple_embeddings, axis=1) * np.linalg.norm(query_emb)))
     
     return "complex" if complex_score > simple_score else "simple"    
-
-
-@router.get("/search")
-async def search_news(query: str):
-    """
-    Queries the vector database for relevant context and passes it
-    to the LLM agent to generate a grounded response.
-    """
-    embedding = model.encode(query).tolist()
-    results = collection.query(query_embeddings=[embedding], n_results=5)
-
-    docs = results.get("documents", [[]])[0]
-    if not docs:
-        context = "No recent news found in the local database."
-        sources_data = []
-    else:
-        documents = results["documents"][0]
-        metadatas = results["metadatas"][0]
-        context = "\n- ".join(documents)
-
-        sources_data = []
-        for doc, meta in zip(documents, metadatas):
-            safe_meta = meta or {}
-            sources_data.append(
-                {
-                    "text": doc,
-                    "sentiment": safe_meta.get("sentiment", "unknown"),
-                    "sentiment_score": safe_meta.get("sentiment_score", 0.0),
-                }
-            )
-
-    prompt = f"""
-    Local Context (News):
-    {context}
-    
-    User Question: {query}
-    
-    Instructions: If the question can be answered using the Local Context, do so. 
-    If it requires current market prices or calculations, use your tools.
-    """
-
-    start = time.time()
-
-    chat = client.aio.chats.create(model="gemini-3-flash-preview", config=agent_config)
-
-    response = await chat.send_message(prompt)
-
-    latency = time.time() - start
-
-    with mlflow.start_run(run_name="agent_query"):
-        mlflow.log_param("query", query)
-        mlflow.log_metric("latency_seconds", latency)
-        mlflow.log_param("response", response.text)
-        mlflow.set_tag("model_version", "gemini-3-flash-preview")
-        mlflow.set_tag("architecture", "RAG + Agents")
-
-    return {"query": query, "response": response.text, "sources": sources_data}
-
 
 async def run_agent_with_history(query: str, message_history, user_id: str, model_override: str = None):
     """
@@ -222,10 +157,31 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
         get_portfolio_status
     ],
     temperature=0.0,
-    system_instruction=f"""You are an Autonomous Financial Assistant. You have access to a local news database (RAG Context) and external tools.
-    CRITICAL RULES:
-    1. If the user asks for current prices, calculations, or alerts, YOU MUST USE THE TOOLS. Do not rely on local news for live prices.
-    2. The current user's ID is '{user_id}'. You must use this EXACT ID when calling any tool that requires a user_id parameter. Never ask the user for their ID."""
+    system_instruction=f"""
+    You are an Institutional-Level Quantitative Analyst and Risk Manager. Your objective is to assist the user in financial decisions, manage their simulated portfolio, and analyze the market.
+
+    SYSTEM CONTEXT:
+    - Current user ID: {user_id} (Use this EXACT ID whenever a tool requires it).
+
+    STRICT OPERATING RULES:
+    1. Prices and Market: NEVER assume or invent a price. ALWAYS use `get_live_stock_price`.
+    2. News (RAG): Base your fundamental analysis ONLY on the provided local context. If there is no relevant news about a ticker, state this explicitly ("I have no recent news about X"). NEVER invent macroeconomic events.
+    3. Alerts: If the user requests that you alert or notify them about a price, you MUST use `set_price_alert`.
+    4. Math: Use `calculate_math` for any calculations." Percentages, averages, or returns. Don't do mental math.
+
+    INTERNAL REASONING PROCESS (You must follow this order):
+    Step 1 (Intent): Classify whether the user is looking for analysis, wants to set an alert, or wants to execute a trade.
+
+    Step 2 (Validation): If it's a trade or they're asking to see their account, execute `get_portfolio_status` FIRST.
+
+    Step 3 (Risk): If a buy order requires more than 50% of their available USD balance, execute the order but clearly warn about the exposure and lack of diversification.
+
+    Step 4 (Execution): If there isn't enough balance for a trade, bounce the order, mathematically detailing the difference, and suggest buying the maximum amount the balance allows.
+
+    Step 5 (Synthesis): Deliver your final response in a structured, direct, and professional manner.
+
+    CRITICAL CONSTRAINT: If a tool returns an error (e.g., (Ticker not found, database error), explain it to the user. NEVER simulate or fabricate that a transaction was successful if the tool failed.
+    """
 )
     if model_override:
         complexity = "manual_override"
