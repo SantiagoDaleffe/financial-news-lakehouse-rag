@@ -2,7 +2,7 @@ import yfinance as yf
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from .models import PriceAlert
+from .models import PriceAlert, PortfolioAccount, PortfolioPosition, PortfolioTransaction
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://airflow:airflow@airflow-postgres:5432/airflow")
 engine = create_engine(DATABASE_URL)
@@ -143,5 +143,144 @@ def delete_price_alert(alert_id: int, user_id: str) -> dict:
     except Exception as e:
         db.rollback()
         return {"error": f"Database error: {str(e)}"}
+    finally:
+        db.close()
+        
+def get_portfolio_status(user_id: str) -> dict:
+    """
+    Fetches the user's current paper trading portfolio, including cash balance and active stock positions.
+    Use this whenever the user asks about their balance, what they own, or how their investments are doing.
+    args:
+        user_id: the ID of the current user
+    """
+    db = SessionLocal()
+    try:
+
+        account = db.query(PortfolioAccount).filter(PortfolioAccount.user_id == user_id).first()
+        if not account:
+            account = PortfolioAccount(user_id=user_id, cash_balance=10000.0)
+            db.add(account)
+            db.commit()
+            
+
+        positions = db.query(PortfolioPosition).filter(
+            PortfolioPosition.user_id == user_id, 
+            PortfolioPosition.quantity > 0
+        ).all()
+        
+        pos_list = [
+            {
+                "ticker": p.ticker, 
+                "quantity": p.quantity, 
+                "average_buy_price": p.average_buy_price
+            } for p in positions
+        ]
+            
+        return {
+            "cash_balance_usd": account.cash_balance,
+            "active_positions": pos_list
+        }
+    except Exception as e:
+        return {"error": f"Database error: {str(e)}"}
+    finally:
+        db.close()
+
+def execute_paper_trade(ticker: str, action: str, quantity: float, user_id: str) -> dict:
+    """
+    Executes a simulated buy or sell order in the paper trading environment.
+    Use this strictly when the user explicitly asks to buy or sell an asset.
+    args:
+        ticker: market symbol (eg 'AAPL', 'BTC-USD')
+        action: strictly 'BUY' or 'SELL'
+        quantity: numeric amount of shares/coins to trade
+        user_id: the ID of the current user
+    """
+    action = action.upper()
+    if action not in ["BUY", "SELL"]:
+        return {"error": "action must be exactly BUY or SELL"}
+    if float(quantity) <= 0:
+        return {"error": "quantity must be greater than 0"}
+
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        if not current_price:
+            return {"error": f"could not fetch live market price for {ticker}. market might be closed."}
+    except Exception as e:
+        return {"error": f"error fetching live price: {str(e)}"}
+
+    total_amount = float(quantity) * float(current_price)
+
+    db = SessionLocal()
+    try:
+        account = db.query(PortfolioAccount).filter(PortfolioAccount.user_id == user_id).first()
+        if not account:
+            account = PortfolioAccount(user_id=user_id, cash_balance=10000.0)
+            db.add(account)
+            
+        position = db.query(PortfolioPosition).filter(
+            PortfolioPosition.user_id == user_id,
+            PortfolioPosition.ticker == ticker.upper()
+        ).first()
+
+        if action == "BUY":
+            if account.cash_balance < total_amount:
+                return {"error": f"insufficient funds. need {total_amount:.2f} USD, have {account.cash_balance:.2f} USD."}
+            
+            account.cash_balance -= total_amount
+            
+            if position:
+
+                total_cost_before = position.quantity * position.average_buy_price
+                total_cost_new = total_cost_before + total_amount
+                new_quantity = position.quantity + float(quantity)
+                
+                position.average_buy_price = total_cost_new / new_quantity
+                position.quantity = new_quantity
+            else:
+                new_pos = PortfolioPosition(
+                    user_id=user_id,
+                    ticker=ticker.upper(),
+                    quantity=float(quantity),
+                    average_buy_price=current_price
+                )
+                db.add(new_pos)
+
+        elif action == "SELL":
+            if not position or position.quantity < float(quantity):
+                current_qty = position.quantity if position else 0
+                return {"error": f"insufficient shares. trying to sell {quantity}, but you only own {current_qty}."}
+            
+
+            account.cash_balance += total_amount
+
+            position.quantity -= float(quantity)
+            
+
+            if position.quantity == 0:
+                db.delete(position)
+
+        transaction = PortfolioTransaction(
+            user_id=user_id,
+            ticker=ticker.upper(),
+            transaction_type=action,
+            quantity=float(quantity),
+            price_per_unit=current_price,
+            total_amount=total_amount
+        )
+        db.add(transaction)
+
+        db.commit()
+        return {
+            "status": "success",
+            "message": f"Successfully executed {action} for {quantity} shares of {ticker} at {current_price:.2f} USD per unit.",
+            "total_transaction_value": total_amount,
+            "remaining_cash_balance": account.cash_balance
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"error": f"database error executing trade: {str(e)}"}
     finally:
         db.close()

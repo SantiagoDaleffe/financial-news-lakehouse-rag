@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 from ..models import ChatRequest, Conversation, Message, User
 from ..security import get_current_user
@@ -6,6 +8,7 @@ from .alerts import get_db
 from .agent import run_agent_with_history
 
 router = APIRouter(tags=["chat"])
+limiter = Limiter(key_func=get_remote_address)
 
 MODEL_COSTS = {
     "gemini-3.1-pro-preview": 5.0,
@@ -15,9 +18,12 @@ MODEL_COSTS = {
     "gemini-2.5-flash-lite": 0.5,
 }
 
+
 @router.post("/")
+@limiter.limit("5/minute")
 async def chat(
-    request: ChatRequest,
+    request: Request,
+    chat_request: ChatRequest,
     user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -26,27 +32,28 @@ async def chat(
     and manages user credits.
     """
     user = db.query(User).filter(User.id == user_id).first()
-    
+
     # DEV
     if not user:
         user = User(id=user_id, email=f"{user_id}@test.com", credits=100.0)
         db.add(user)
         db.commit()
         db.refresh(user)
-        
+
     if user.credits <= 0:
-        raise HTTPException(status_code=402, detail='Insufficient tokens to perform the query.')
-    
-    
-    if not request.conversation_id:
+        raise HTTPException(
+            status_code=402, detail="Insufficient tokens to perform the query."
+        )
+
+    if not chat_request.conversation_id:
         new_conversation = Conversation(
-            user_id=user_id, title=request.message[:40] + "..."
+            user_id=user_id, title=chat_request.message[:40] + "..."
         )
         db.add(new_conversation)
         db.flush()
         conversation_id = new_conversation.id
     else:
-        conversation_id = request.conversation_id
+        conversation_id = chat_request.conversation_id
         conversation = (
             db.query(Conversation)
             .filter(Conversation.id == conversation_id, Conversation.user_id == user_id)
@@ -54,13 +61,12 @@ async def chat(
         )
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        
 
     new_message = Message(
         conversation_id=conversation_id,
         user_id=user_id,
         role="user",
-        content=request.message,
+        content=chat_request.message,
     )
     db.add(new_message)
     db.flush()
@@ -75,13 +81,13 @@ async def chat(
     )
 
     ai_response, sources, is_cached, model_used = await run_agent_with_history(
-        request.message, message_history, user_id, request.model_override
+        chat_request.message, message_history, user_id, chat_request.model_override
     )
-    
+
     cost = 0.0
-    if not is_cached and model_used != 'failed_all':
+    if not is_cached and model_used != "failed_all":
         cost = MODEL_COSTS.get(model_used, 1.0)
-        
+
     user.credits -= cost
 
     ai_message = Message(
@@ -98,6 +104,6 @@ async def chat(
         "response": ai_response,
         "sources": sources,
         "is_cached": is_cached,
-        'model_used': model_used,
-        'credits_remaining': user.credits
+        "model_used": model_used,
+        "credits_remaining": user.credits,
     }

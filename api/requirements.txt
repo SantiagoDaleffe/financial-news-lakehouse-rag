@@ -17,3 +17,4 @@ sqlalchemy
 requests
 PyJWT==2.8.0
 python-multipart
+slowapi

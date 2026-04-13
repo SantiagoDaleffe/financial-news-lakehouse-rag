@@ -140,6 +140,8 @@ services:
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
       - "5050:80"
+    volumes:
+      - ./servers.json:/pgadmin4/servers.jso
     depends_on:
       airflow-postgres:
         condition: service_healthy

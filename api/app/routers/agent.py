@@ -14,7 +14,9 @@ from ..agent_tools import (
     set_price_alert, 
     get_user_alerts, 
     update_price_alert, 
-    delete_price_alert
+    delete_price_alert,
+    execute_paper_trade,
+    get_portfolio_status
 )
 from ..semantic_cache import SemanticCache
 
@@ -154,7 +156,7 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
     """
     is_cached = False
     
-    transactional_keywords = ['alert', 'create', 'delete', 'notify', 'my', 'have', 'account'] 
+    transactional_keywords = ['alert', 'create', 'delete', 'notify', 'my', 'have', 'account', 'buy', 'sell', 'trade', 'portfolio', 'position'] 
     
     is_transactional = any(word in query.lower() for word in transactional_keywords)
     
@@ -215,7 +217,9 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
         set_price_alert, 
         get_user_alerts, 
         update_price_alert, 
-        delete_price_alert
+        delete_price_alert,
+        execute_paper_trade,
+        get_portfolio_status
     ],
     temperature=0.0,
     system_instruction=f"""You are an Autonomous Financial Assistant. You have access to a local news database (RAG Context) and external tools.

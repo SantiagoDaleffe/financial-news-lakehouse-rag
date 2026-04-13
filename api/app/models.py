@@ -13,7 +13,7 @@ class PriceAlert(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(String, index=True, default="public_b2c")
-    user_id = Column(String, ForeignKey('users.id'), index=True)
+    user_id = Column(String, ForeignKey("users.id"), index=True)
     ticker = Column(String, index=True)
     target_price = Column(Float)
     condition = Column(String)
@@ -26,7 +26,7 @@ class Conversation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     # tenant_id = Column(String, index=True, default="public_b2c")
-    user_id = Column(String, ForeignKey('users.id'), index=True)
+    user_id = Column(String, ForeignKey("users.id"), index=True)
     title = Column(String, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     messages = relationship("Message", back_populates="conversation")
@@ -37,7 +37,7 @@ class Message(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("conversation.id"), index=True)
-    user_id = Column(String, ForeignKey('users.id'), index=True)
+    user_id = Column(String, ForeignKey("users.id"), index=True)
     role = Column(String)
     content = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -48,18 +48,20 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[int] = None
     model_override: Optional[str] = None
-    
+
 
 class User(Base):
-    __tablename__ = 'users'
-    
+    __tablename__ = "users"
+
     id = Column(String, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
     credits = Column(Float, default=100.0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
+
 class MarketData(Base):
     """Save the daily closing price (EOD) for the universe of tickers"""
+
     __tablename__ = "market_data"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -71,5 +73,39 @@ class MarketData(Base):
     close = Column(Float)
     volume = Column(Float)
     adj_close = Column(Float)
-    
 
+
+class PortfolioAccount(Base):
+    """Experimental simulated portfolio"""
+
+    __tablename__ = "portfolio_accounts"
+
+    user_id = Column(String, ForeignKey("users.id"), primary_key=True)
+    cash_balance = Column(Float, default=100000.0)
+
+
+class PortfolioPosition(Base):
+    """Experimental simulated portfolio position for PnL and risk modeling, and backtesting"""
+
+    __tablename__ = "portfolio_positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("users.id"))
+    ticker = Column(String, index=True)
+    quantity = Column(Float, default=0.0)
+    average_buy_price = Column(Float, default=0.0)
+
+
+class PortfolioTransaction(Base):
+    """Audit log of all transactions in the simulated portfolio"""
+
+    __tablename__ = "portfolio_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("users.id"))
+    ticker = Column(String)
+    transaction_type = Column(String)  # buy or sell
+    quantity = Column(Float)
+    price_per_unit = Column(Float)  # price at which the transaction was executed
+    total_amount = Column(Float)  # quantity * price_per_unit
+    timestamp = Column(DateTime, default=datetime.utcnow)

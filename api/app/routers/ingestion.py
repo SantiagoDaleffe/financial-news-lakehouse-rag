@@ -22,9 +22,15 @@ s3_client = boto3.client(
 bucket_name = 'data-lake'
 rabbitmq_url = os.getenv('RABBITMQ_URL')
 
-print("Connecting to ChromaDB...", flush=True)
-chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
-collection = chroma_client.get_or_create_collection(name="fin_news_v1")
+chroma_client = None
+news_collection = None
+
+def get_chroma_collection():
+    global chroma_client, news_collection
+    if news_collection is None:
+        chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
+        news_collection = chroma_client.get_or_create_collection(name="fin_news_v1")
+    return news_collection
 
 class NewsItem(BaseModel):
     text: str
@@ -77,14 +83,17 @@ def ingest_news(item: NewsItem):
 @router.delete('/prune')
 def prune_old_news(days: int = 30):
     """
-    Physically removes all vectors older than 'days' from ChromaDB.
-    Ideal for calling from a maintenance Airflow DAG.
+    Elimina físicamente de ChromaDB todos los vectores que sean más antiguos que 'days'.
     """
-    
     cutoff_timestamp = time.time() - (days * 86400)
-    collection.delete(
+    
+
+    col = get_chroma_collection()
+    
+    col.delete(
         where={"published_at": {"$lt": cutoff_timestamp}}
     )
-    print(f"Purge completed: News older than {days} days has been removed.", flush=True)
+    
+    print(f"🗑️ Purga completada: Eliminadas noticias más antiguas que {days} días.", flush=True)
     return {"status": "ok", "deleted_older_than_days": days}
 
