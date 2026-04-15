@@ -24,10 +24,12 @@ router = APIRouter(tags=["agent"])
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 mlflow.set_experiment("rag_search_experiment")
 
-client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+chroma_host = os.getenv("CHROMA_HOST")
+
 
 print("connecting to chromadb...", flush=True)
-chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
+chroma_client = chromadb.HttpClient(host=chroma_host, port=8000)
 
 while True:
     try:

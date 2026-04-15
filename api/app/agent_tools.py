@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from .models import PriceAlert, PortfolioAccount, PortfolioPosition, PortfolioTransaction
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://airflow:airflow@airflow-postgres:5432/airflow")
+DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -158,7 +158,7 @@ def get_portfolio_status(user_id: str) -> dict:
 
         account = db.query(PortfolioAccount).filter(PortfolioAccount.user_id == user_id).first()
         if not account:
-            account = PortfolioAccount(user_id=user_id, cash_balance=10000.0)
+            account = PortfolioAccount(user_id=user_id, cash_balance=100000.0)
             db.add(account)
             db.commit()
             
@@ -216,7 +216,7 @@ def execute_paper_trade(ticker: str, action: str, quantity: float, user_id: str)
     try:
         account = db.query(PortfolioAccount).filter(PortfolioAccount.user_id == user_id).first()
         if not account:
-            account = PortfolioAccount(user_id=user_id, cash_balance=10000.0)
+            account = PortfolioAccount(user_id=user_id, cash_balance=100000.0)
             db.add(account)
             
         position = db.query(PortfolioPosition).filter(

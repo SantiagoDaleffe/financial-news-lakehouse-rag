@@ -19,8 +19,9 @@ s3_client = boto3.client(
     region_name='us-east-1'
 )
 
-bucket_name = 'data-lake'
+bucket_name = os.getenv("S3_BUCKET_NAME")
 rabbitmq_url = os.getenv('RABBITMQ_URL')
+chroma_host = os.getenv("CHROMA_HOST")
 
 chroma_client = None
 news_collection = None
@@ -28,7 +29,7 @@ news_collection = None
 def get_chroma_collection():
     global chroma_client, news_collection
     if news_collection is None:
-        chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
+        chroma_client = chromadb.HttpClient(host=chroma_host, port=8000)
         news_collection = chroma_client.get_or_create_collection(name="fin_news_v1")
     return news_collection
 

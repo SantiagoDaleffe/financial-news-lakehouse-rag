@@ -6,7 +6,7 @@ import os
 from dateutil import parser
 
 API_KEY = os.getenv("NEWS_API_KEY")
-INGESTION_URL = os.getenv("INGESTION_API_URL", "http://api:8000/api/v1/ingest")
+INGESTION_URL = os.getenv("INGESTION_API_URL")
 
 TICKERS_QUERY = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "Bitcoin", "Ethereum"]
 

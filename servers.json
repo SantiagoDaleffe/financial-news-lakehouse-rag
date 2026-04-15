@@ -2,7 +2,7 @@
     "Servers": {
         "1": {
             "Name": "Airflow Postgres DB",
-            "Group": "Servidores",
+            "Group": "Servers",
             "Host": "airflow-postgres",
             "Port": 5432,
             "MaintenanceDB": "airflow",

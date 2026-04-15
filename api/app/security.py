@@ -2,12 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import jwt
 import os
+import secrets
 from datetime import datetime, timedelta
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "secret_key")
+
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32))
 ALGORITHM = "HS256"
+
+
+API_ADMIN_USER = os.getenv("API_ADMIN_USER", "admin")
+API_ADMIN_PASSWORD = os.getenv("API_ADMIN_PASSWORD", secrets.token_urlsafe(16))
 
 router = APIRouter(tags=["auth"])
 
@@ -16,9 +22,9 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     """
     Native endpoint for Swagger and the frontend to generate the JWT token.
     """
-    if form_data.username == "admin" and form_data.password == "admin":
+    if form_data.username == API_ADMIN_USER and form_data.password == API_ADMIN_PASSWORD:
         payload = {
-            "sub": "default_user",
+            "sub": form_data.username, #todo
             "exp": datetime.utcnow() + timedelta(days=1)
         }
         token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)

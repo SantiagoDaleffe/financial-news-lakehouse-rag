@@ -31,9 +31,3 @@ jobs:
         push: false
         tags: genai_worker:latest
 
-    - name: Build Frontend Image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./frontend
-        push: false
-        tags: genai_frontend:latest

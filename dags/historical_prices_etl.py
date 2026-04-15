@@ -6,7 +6,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://airflow:airflow@airflow-postgres:5432/airflow")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 TICKERS_UNIVERSE = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",

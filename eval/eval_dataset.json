@@ -1,0 +1,63 @@
+[
+  {
+    "query": "What are the latest news regarding Bitcoin's regulatory changes in the EU today?",
+    "expected_tool": "none",
+    "requires_rag": true,
+    "intent": "fundamental_analysis"
+  },
+  {
+    "query": "Execute a buy order for 500 USD worth of Tesla (TSLA) stock immediately.",
+    "expected_tool": ["get_portfolio_status", "get_live_stock_price"],
+    "requires_rag": false,
+    "intent": "trade"
+  },
+  {
+    "query": "What was the closing price of Apple (AAPL) in today's trading session?",
+    "expected_tool": "get_live_stock_price",
+    "requires_rag": false,
+    "intent": "price_check"
+  },
+  {
+    "query": "Set an urgent alert if Ethereum (ETH-USD) drops below the 3000 threshold.",
+    "expected_tool": "set_price_alert",
+    "requires_rag": false,
+    "intent": "alert"
+  },
+  {
+    "query": "How much liquid cash do I currently have available in my investment account?",
+    "expected_tool": "get_portfolio_status",
+    "requires_rag": false,
+    "intent": "portfolio_check"
+  },
+  {
+    "query": "If I purchase 15 shares of NVDA at 850 and they appreciate by 12.5%, what would be my total profit?",
+    "expected_tool": "calculate_math",
+    "requires_rag": false,
+    "intent": "math"
+  },
+  {
+    "query": "I'm considering liquidating my holdings. Based on recent news, how did Microsoft's latest earnings report affect market sentiment?",
+    "expected_tool": ["get_portfolio_status"],
+    "requires_rag": true,
+    "intent": "mixed_portfolio_rag"
+  },
+  {
+    "query": "Can you list all the active price notifications I currently have configured?",
+    "expected_tool": "get_user_alerts",
+    "requires_rag": false,
+    "intent": "alert_management"
+  },
+  {
+    "query": "Remove the price alert I have set for Tesla.",
+    "expected_tool": ["delete_price_alert", "get_user_alerts"],
+    "requires_rag": false,
+    "intent": "alert_management"
+  },
+  {
+    "query": "Hey there! How are you doing today?",
+    "expected_tool": "none",
+    "requires_rag": false,
+    "intent": "chit_chat"
+  }
+]
+
