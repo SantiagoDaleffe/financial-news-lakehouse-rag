@@ -9,6 +9,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from transformers import pipeline
 
 chroma_host = os.getenv("CHROMA_HOST")
+chroma_port = os.getenv("CHROMA_PORT")
+
 print("loading sentence transformer model...", flush=True)
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
@@ -16,7 +18,7 @@ print("loading finbert sentiment model...", flush=True)
 sentiment_model = pipeline('text-classification', model='ProsusAI/finbert')
 
 print("connecting to chromadb...", flush=True)
-chroma_client = chromadb.HttpClient(host=chroma_host, port=8000)
+chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
 
 while True:
     try:

@@ -26,10 +26,11 @@ mlflow.set_experiment("rag_search_experiment")
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 chroma_host = os.getenv("CHROMA_HOST")
+chroma_port = os.getenv("CHROMA_PORT")
 
 
 print("connecting to chromadb...", flush=True)
-chroma_client = chromadb.HttpClient(host=chroma_host, port=8000)
+chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
 
 while True:
     try:
@@ -229,7 +230,7 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
     if response_text and model_used != "failed_all" and not is_transactional:
         cache.save(query, response_text)
         
-    with mlflow.start_run(run_name="chat_with_history"):
+    with mlflow.start_run(run_name="chat_with_history", nested=True):
         mlflow.log_param("query", query)
         mlflow.log_metric("latency_seconds", latency)
         mlflow.log_param("history_length", len(gemini_history))

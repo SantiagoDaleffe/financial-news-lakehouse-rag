@@ -33,6 +33,7 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow_secure_pass_replace_me}@airflow-postgres:5432/${POSTGRES_DB:-airflow}
       - GIT_PYTHON_REFRESH=quiet
       - CHROMA_HOST=${CHROMA_HOST}
+      - CHROMA_PORT=${CHROMA_PORT}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
 
   alert-worker:
@@ -59,7 +60,7 @@ services:
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
       - CHROMA_HOST=${CHROMA_HOST}
-
+      - CHROMA_PORT=${CHROMA_PORT}
   chromadb:
     image: chromadb/chroma:0.4.24
     ports:

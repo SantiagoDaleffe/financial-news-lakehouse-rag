@@ -1,0 +1,22 @@
+[
+  {
+    "query": "What were the main drivers behind Apple's (AAPL) stock performance recently according to the news?",
+    "intent": "company_analysis"
+  },
+  {
+    "query": "Are there any recent regulatory updates, SEC investigations, or ETF news affecting the cryptocurrency market, specifically Bitcoin?",
+    "intent": "crypto_macro"
+  },
+  {
+    "query": "Summarize the latest financial outlook, earnings reports, or AI chip developments for Nvidia (NVDA).",
+    "intent": "tech_earnings"
+  },
+  {
+    "query": "What is the current market sentiment regarding Tesla's (TSLA) production numbers, deliveries, or Elon Musk's recent statements?",
+    "intent": "sentiment_analysis"
+  },
+  {
+    "query": "How are the latest Federal Reserve interest rate decisions or inflation data impacting the broader tech sector (QQQ)?",
+    "intent": "macroeconomic_impact"
+  }
+]

@@ -12,8 +12,8 @@ def get_local_uri(uri, default_host="localhost"):
         if parsed.hostname: return uri.replace(parsed.hostname, default_host)
     return uri
 
-os.environ["MLFLOW_TRACKING_URI"] = get_local_uri(os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"))
-os.environ["DATABASE_URL"] = get_local_uri(os.getenv("DATABASE_URL", "postgresql://airflow:airflow@airflow-postgres:5432/airflow"))
+os.environ["MLFLOW_TRACKING_URI"] = get_local_uri(os.getenv("MLFLOW_TRACKING_URI"))
+os.environ["DATABASE_URL"] = get_local_uri(os.getenv("DATABASE_URL"))
 
 
 import json
