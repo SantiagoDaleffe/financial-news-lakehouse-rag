@@ -1,42 +1,65 @@
 import numpy as np
 import pandas as pd
+from typing import Dict
 
 class PortfolioEvaluator:
-    def __init__(self, risk_free_rate=0.0):
+    """
+    Computes core financial performance metrics for the trading strategy.
+    
+    Evaluates the Out-of-Sample predictions against actual forward returns, 
+    accounting for compounding logic and panel data aggregations.
+    """
+    def __init__(self, risk_free_rate: float = 0.0):
+        """
+        Args:
+            risk_free_rate (float): The annualized risk-free rate for Sharpe calculation.
+        """
         self.rf = risk_free_rate 
         
-    def calculate_metrics(self, df_resultados):
-        df = df_resultados.copy()
+    def calculate_metrics(self, results_df: pd.DataFrame) -> Dict[str, float]:
+        """
+        Calculates Total Return, Max Drawdown, and Sharpe Ratio.
         
-        # Retorno individual de cada decisión
-        df['retorno_estrategia'] = np.where(df['y_pred'] == 1, df['fwd_log_return'],
-                                   np.where(df['y_pred'] == -1, -df['fwd_log_return'], 0.0))
+        Args:
+            results_df (pd.DataFrame): DataFrame containing 'y_pred' and 'fwd_log_return'.
+
+        Returns:
+            Dict[str, float]: A dictionary of the computed financial metrics.
+        """
+        df = results_df.copy()
         
-        # Agrupamos por fecha (index) y promediamos. 
-        # Esto soluciona el bicho de panel data dividiendo el capital por día entre los activos
-        diario = df.groupby(level=0)[['fwd_log_return', 'retorno_estrategia']].mean()
+        # Individual trade return based on signal
+        df['strategy_return'] = np.where(
+            df['y_pred'] == 1, df['fwd_log_return'],
+            np.where(df['y_pred'] == -1, -df['fwd_log_return'], 0.0)
+        )
         
-        retornos_estrategia = diario['retorno_estrategia'].values
-        retornos_mercado = diario['fwd_log_return'].values
+        # Aggregate cross-sectionally by date to simulate a daily rebalanced equal-weight portfolio
+        daily_returns = df.groupby(level=0)[['fwd_log_return', 'strategy_return']].mean()
         
-        # 1. Retorno Acumulado correcto
-        retorno_acum_estrategia = np.exp(np.sum(retornos_estrategia)) - 1
-        retorno_acum_mercado = np.exp(np.sum(retornos_mercado)) - 1
+        strat_returns = daily_returns['strategy_return'].values
+        market_returns = daily_returns['fwd_log_return'].values
         
-        # 2. Maximum Drawdown diario
-        curva_capital = np.exp(np.cumsum(retornos_estrategia))
-        picos_maximos = np.maximum.accumulate(curva_capital)
-        drawdowns = (curva_capital - picos_maximos) / picos_maximos
-        mdd = np.min(drawdowns) 
+        # 1. Cumulative Return
+        cum_strat_return = np.exp(np.sum(strat_returns)) - 1
+        cum_market_return = np.exp(np.sum(market_returns)) - 1
         
-        # 3. Sharpe Ratio Anualizado basado en retornos diarios del portafolio
-        media_diaria = np.mean(retornos_estrategia)
-        std_diaria = np.std(retornos_estrategia) + 1e-8
-        sharpe_ratio = np.sqrt(252) * (media_diaria - (self.rf / 252)) / std_diaria
+        # 2. Maximum Drawdown
+        # $$MDD = \min \left( \frac{V_t - \max_{\tau \leq t} V_\tau}{\max_{\tau \leq t} V_\tau} \right)$$
+        equity_curve = np.exp(np.cumsum(strat_returns))
+        running_max = np.maximum.accumulate(equity_curve)
+        drawdowns = (equity_curve - running_max) / running_max
+        max_drawdown = np.min(drawdowns) 
+        
+        # 3. Annualized Sharpe Ratio
+        # $$\text{Sharpe} = \frac{\sqrt{252} \times (\mu_p - R_f)}{\sigma_p}$$
+        daily_mean = np.mean(strat_returns)
+        daily_std = np.std(strat_returns) + 1e-8
+        sharpe_ratio = np.sqrt(252) * (daily_mean - (self.rf / 252)) / daily_std
         
         return {
-            "Total_Return_Strat": retorno_acum_estrategia,
-            "Total_Return_Market": retorno_acum_mercado,
-            "Max_Drawdown": mdd,
+            "Total_Return_Strat": cum_strat_return,
+            "Total_Return_Market": cum_market_return,
+            "Max_Drawdown": max_drawdown,
             "Sharpe_Ratio": sharpe_ratio
         }

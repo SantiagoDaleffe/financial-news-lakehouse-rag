@@ -1,80 +1,81 @@
 import numpy as np
+import pandas as pd
+import lightgbm as lgb
 from sklearn.metrics import accuracy_score
+from typing import Dict, Any
+
+from targets.target_engineer import TargetEngineer
 
 class TickerLeaveOneOut:
-    def __init__(self, backtester_instance):
+    """
+    Tests spatial generalization using a Leave-One-Out Cross-Validation (LOOCV) approach 
+    over the cross-sectional universe (Tickers).
+    
+    Verifies if the model learns universal market microstructures rather than memorizing 
+    idiosyncratic behaviors of specific assets.
+    """
+    def __init__(self, backtester_instance: Any):
         self.backtester = backtester_instance
         
-    def run(self, df_panel, lgbm_params):
-        tickers = df_panel['ticker'].unique()
-        print(f"\n--- INICIANDO TEST DE GENERALIZACIÓN (TICKER LEAVE-ONE-OUT) ---")
-        print(f"Tickers disponibles: {list(tickers)}")
+    def run(self, panel_df: pd.DataFrame, lgbm_params: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Iteratively holds out one ticker, trains on the rest, and evaluates on the hold-out.
+        """
+        tickers = panel_df['ticker'].unique()
+        print(f"\n--- INITIATING GENERALIZATION TEST (TICKER LEAVE-ONE-OUT) ---")
+        print(f"Available Universe: {list(tickers)}")
         
-        resultados_loo = {}
+        loo_results = {}
         
-        for ticker_test in tickers:
-            print(f"\n>> Dejando afuera: {ticker_test}")
+        for test_ticker in tickers:
+            print(f"\n>> Hold-out Ticker: {test_ticker}")
             
-            # 1. Separar universos
-            mask_test = df_panel['ticker'] == ticker_test
-            df_train_pool = df_panel[~mask_test].copy()
-            df_test_pool = df_panel[mask_test].copy()
+            mask_test = panel_df['ticker'] == test_ticker
+            train_pool_df = panel_df[~mask_test].copy()
+            test_pool_df = panel_df[mask_test].copy()
             
-            # 2. Recreamos la lógica del tiempo del Walk-Forward
-            # Pero entrenamos en el pool general y predecimos en el ticker aislado
-            fechas_unicas = df_panel.index.unique().sort_values()
-            inicio_bucle = self.backtester.dias_entrenamiento + self.backtester.dias_embargo
+            unique_dates = panel_df.index.unique().sort_values()
+            loop_start = self.backtester.train_days + self.backtester.embargo_days
             
-            y_true_aislado = []
-            y_pred_aislado = []
+            isolated_y_true = []
+            isolated_y_pred = []
             
-            for i in range(inicio_bucle, len(fechas_unicas), self.backtester.dias_paso):
-                idx_train_start = i - self.backtester.dias_embargo - self.backtester.dias_entrenamiento
-                idx_train_end = i - self.backtester.dias_embargo - 1
-                
+            for i in range(loop_start, len(unique_dates), self.backtester.step_days):
+                idx_train_start = i - self.backtester.embargo_days - self.backtester.train_days
+                idx_train_end = i - self.backtester.embargo_days - 1
                 idx_test_start = i
-                idx_test_end = min(i + self.backtester.dias_paso - 1, len(fechas_unicas) - 1)
+                idx_test_end = min(i + self.backtester.step_days - 1, len(unique_dates) - 1)
                 
-                fecha_inicio_train = fechas_unicas[idx_train_start]
-                fecha_fin_train = fechas_unicas[idx_train_end]
-                fecha_inicio_test = fechas_unicas[idx_test_start]
-                fecha_fin_test = fechas_unicas[idx_test_end]
+                # Train subset: All tickers EXCEPT the hold-out
+                train_mask = (train_pool_df.index >= unique_dates[idx_train_start]) & (train_pool_df.index <= unique_dates[idx_train_end])
+                train_df = train_pool_df.loc[train_mask].copy()
                 
-                # Train: Universo Menos el Ticker
-                train_mask = (df_train_pool.index >= fecha_inicio_train) & (df_train_pool.index <= fecha_fin_train)
-                df_train = df_train_pool.loc[train_mask].copy()
+                # Test subset: ONLY the hold-out ticker
+                test_mask = (test_pool_df.index >= unique_dates[idx_test_start]) & (test_pool_df.index <= unique_dates[idx_test_end])
+                test_df = test_pool_df.loc[test_mask].copy()
                 
-                # Test: SOLAMENTE el Ticker dejado afuera
-                test_mask = (df_test_pool.index >= fecha_inicio_test) & (df_test_pool.index <= fecha_fin_test)
-                df_test = df_test_pool.loc[test_mask].copy()
-                
-                if len(df_train) < 100 or len(df_test) < 5:
+                if len(train_df) < 100 or len(test_df) < 5:
                     continue 
                 
-                # Target dinámico basado SOLO en el pool de entrenamiento
-                from targets.target_engineer import TargetEngineer 
                 target_maker = TargetEngineer(q_high=self.backtester.q_high, q_low=self.backtester.q_low)
-                df_train = target_maker.fit_transform(df_train)
-                # Aplicamos esos mismos umbrales al ticker aislado
-                df_test = target_maker.transform(df_test)
+                train_df = target_maker.fit_transform(train_df)
+                test_df = target_maker.transform(test_df)
                 
-                cols_a_borrar = ['target', 'fwd_log_return', 'close']
-                X_train = df_train.drop(columns=cols_a_borrar, errors='ignore')
-                y_train = df_train['target']
-                X_test = df_test.drop(columns=cols_a_borrar, errors='ignore')
-                y_test = df_test['target']
+                drop_cols = ['target', 'fwd_log_return', 'close']
+                X_train = train_df.drop(columns=drop_cols, errors='ignore')
+                y_train = train_df['target']
+                X_test = test_df.drop(columns=drop_cols, errors='ignore')
+                y_test = test_df['target']
                 
-                # Entrenar modelo (Ciego al ticker de test)
-                import lightgbm as lgb
                 model = lgb.LGBMClassifier(**lgbm_params)
                 model.fit(X_train, y_train)
                 
                 preds = model.predict(X_test)
-                y_pred_aislado.extend(preds)
-                y_true_aislado.extend(y_test)
+                isolated_y_pred.extend(preds)
+                isolated_y_true.extend(y_test)
                 
-            acc_ticker = accuracy_score(y_true_aislado, y_pred_aislado)
-            resultados_loo[ticker_test] = acc_ticker
-            print(f"Accuracy prediciendo {ticker_test} sin haberlo visto nunca: {acc_ticker:.4f}")
+            ticker_acc = accuracy_score(isolated_y_true, isolated_y_pred)
+            loo_results[test_ticker] = ticker_acc
+            print(f"Zero-shot accuracy for {test_ticker}: {ticker_acc:.4f}")
             
-        return resultados_loo
+        return loo_results

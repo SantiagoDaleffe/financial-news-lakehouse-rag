@@ -1,24 +1,34 @@
 import yfinance as yf
 import numpy as np
+import pandas as pd
 
-def add_vix_features(df_principal, start_date="2020-01-01", end_date="2024-01-01"):
+def add_vix_features(base_df: pd.DataFrame, start_date: str = "2020-01-01", end_date: str = "2026-06-27") -> pd.DataFrame:
     """
-    Descarga el VIX, calcula su variación y lo pega al DataFrame principal.
+    Fetches the CBOE Volatility Index (VIX) and computes its log returns to append as a macro feature.
+
+    The VIX represents the market's expectation of 30-day forward-looking volatility. 
+    Instead of absolute levels, we compute the momentum of fear using log returns:
+    $$R_t = \ln(P_t / P_{t-1})$$
+
+    Args:
+        base_df (pd.DataFrame): The primary dataframe containing asset prices. Must have a DatetimeIndex.
+        start_date (str, optional): Start date for Yahoo Finance fetch. Defaults to "2020-01-01".
+        end_date (str, optional): End date for Yahoo Finance fetch. Defaults to "2026-06-01".
+
+    Returns:
+        pd.DataFrame: The merged dataframe containing original features plus 'vix_close' and 'vix_return'.
     """
-    print("Descargando ^VIX...")
-    # El ticker del VIX en Yahoo Finance lleva el acento circunflejo
-    vix_raw = yf.download("^VIX", start=start_date, end=end_date)
+    print("Downloading ^VIX data...")
+    raw_vix = yf.download("^VIX", start=start_date, end=end_date)
     
-    # Nos quedamos solo con el cierre y normalizamos el nombre
-    df_vix = vix_raw[['Close']].copy()
-    df_vix.columns = ['vix_close']
-    df_vix.index.name = 'date'
+    vix_df = raw_vix[['Close']].copy()
+    vix_df.columns = ['vix_close']
+    vix_df.index.name = 'date'
     
-    # 1. Nivel Absoluto de Miedo: El VIX de por sí ya es estacionario (oscila entre 10 y 80)
-    # 2. Variación de Miedo (Momentum): Qué tan rápido subió el pánico hoy
-    df_vix['vix_return'] = np.log(df_vix['vix_close'] / df_vix['vix_close'].shift(1))
+    # Calculate fear momentum (Log returns)
+    vix_df['vix_return'] = np.log(vix_df['vix_close'] / vix_df['vix_close'].shift(1))
     
-    # Pegamos el VIX al DataFrame de nuestro ticker (ej. SPY) usando la fecha (index)
-    df_merged = df_principal.merge(df_vix, left_index=True, right_index=True, how='left')
+    # Left merge ensures we don't lose primary asset data if VIX data is missing for a specific day
+    merged_df = base_df.merge(vix_df, left_index=True, right_index=True, how='left')
     
-    return df_merged
+    return merged_df

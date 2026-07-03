@@ -11,9 +11,9 @@ router = APIRouter(tags=["chat"])
 limiter = Limiter(key_func=get_remote_address)
 
 MODEL_COSTS = {
+    "gemini-3.5-flash": 2.0,
     "gemini-3.1-pro-preview": 5.0,
     "gemini-2.5-pro": 3.0,
-    "gemini-3-flash-preview": 1.0,
     "gemini-3.1-flash-lite": 0.5,
     "gemini-2.5-flash-lite": 0.5,
 }

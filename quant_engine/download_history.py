@@ -7,7 +7,7 @@ import os
 TICKERS_UNIVERSE = ["SPY", "QQQ", "DIA", "GLD", "TLT", 'IWM']
 
 
-def download_historical_data(start_date="2020-01-01", end_date="2024-01-01"):
+def download_historical_data(start_date="2020-01-01", end_date="2026-06-27"):
 
     df_raw = yf.download(
         TICKERS_UNIVERSE, start=start_date, end=end_date, group_by="ticker"

@@ -193,7 +193,7 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
         complexity = get_routing_complexity(query)
         
         if complexity == 'complex':
-            model_cascade = ["gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview"]
+            model_cascade = ["gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-3.5-flash"]
         else:
             model_cascade = ["gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
         

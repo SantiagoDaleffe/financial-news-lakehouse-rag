@@ -1,4 +1,13 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Float,
+    DateTime,
+    ForeignKey,
+    Date,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 from pydantic import BaseModel
@@ -109,3 +118,26 @@ class PortfolioTransaction(Base):
     price_per_unit = Column(Float)  # price at which the transaction was executed
     total_amount = Column(Float)  # quantity * price_per_unit
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+
+class PredictionsHistory(Base):
+    
+    __tablename__ = "predictions_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    prediction_date = Column(Date, nullable=False)
+    signal_date = Column(Date, nullable=False)
+    ticker = Column(String(10), nullable=False)
+    quant_decision = Column(String(10), nullable=False)
+    quant_probability = Column(Float, nullable=False)
+    conviction_zone = Column(String(10), nullable=False)
+    top_drivers = Column(String(100), nullable=False)
+    pred_close_price = Column(Float, nullable=False)
+    llm_verdict = Column(String(10), nullable=False)
+    actual_close_price = Column(Float, nullable=True)
+    realized_return = Column(Float, nullable=True)
+    reconciliation_status = Column(String(20), default="PENDING")
+
+    __table_args__ = (
+        UniqueConstraint("prediction_date", "ticker", name="unique_ticker_date"),
+    )

@@ -1,61 +1,92 @@
 import pandas as pd
 import lightgbm as lgb
 import numpy as np
+from typing import Tuple, Dict, Any
 from targets.target_engineer import TargetEngineer
 from features.feature_selector import QuantFeatureSelector
 
 class WalkForwardBacktester:
-    def __init__(self, dias_entrenamiento=500, dias_paso=20, dias_embargo=5, q_high=0.66, q_low=0.33, n_features=15):
-        self.dias_entrenamiento = dias_entrenamiento
-        self.dias_paso = dias_paso
-        self.dias_embargo = dias_embargo
+    """
+    Robust time-series validation framework for quantitative models.
+    
+    Implements Walk-Forward Optimization (WFO) with embargo periods to prevent 
+    data leakage and look-ahead bias across overlapping temporal windows.
+    Includes dynamic feature selection per regime.
+    """
+    def __init__(
+        self, 
+        train_days: int = 500, 
+        step_days: int = 20, 
+        embargo_days: int = 5, 
+        q_high: float = 0.66, 
+        q_low: float = 0.33, 
+        n_features: int = 15
+    ):
+        self.train_days = train_days
+        self.step_days = step_days
+        self.embargo_days = embargo_days
         self.q_high = q_high
         self.q_low = q_low
         self.n_features = n_features
 
-    def run(self, df_panel, lgbm_params, shuffle_target=False, umbral_compra=0.50, umbral_venta=0.50):
-        fechas_unicas = df_panel.index.unique().sort_values()
+    def run(
+        self, 
+        panel_df: pd.DataFrame, 
+        lgbm_params: Dict[str, Any], 
+        shuffle_target: bool = False, 
+        buy_threshold: float = 0.50, 
+        sell_threshold: float = 0.50
+    ) -> Tuple[pd.DataFrame, lgb.LGBMClassifier]:
+        """
+        Executes the rolling training and testing loop.
+
+        Args:
+            panel_df (pd.DataFrame): The engineered features dataset.
+            lgbm_params (dict): Hyperparameters for the LightGBM classifier.
+            shuffle_target (bool): If True, breaks the time-series correlation (useful for White's Reality Check).
+            buy_threshold (float): Probability boundary to trigger a long position.
+            sell_threshold (float): Probability boundary to trigger a short position.
+
+        Returns:
+            Tuple: A consolidated DataFrame of all Out-of-Sample predictions, and the last trained model object.
+        """
+        unique_dates = panel_df.index.unique().sort_values()
         
-        resultados_bloques = []
-        ultimo_modelo = None
+        block_results = []
+        last_model = None
         selector = QuantFeatureSelector(n_features=self.n_features)
         
-        inicio_bucle = self.dias_entrenamiento + self.dias_embargo
-        print(f"Iniciando Walk-Forward con Embargo de {self.dias_embargo} días...")
+        loop_start = self.train_days + self.embargo_days
+        print(f"Initiating Walk-Forward Validation with a {self.embargo_days}-day embargo...")
 
-        for i in range(inicio_bucle, len(fechas_unicas), self.dias_paso):
-            idx_train_start = i - self.dias_embargo - self.dias_entrenamiento
-            idx_train_end = i - self.dias_embargo - 1
+        for i in range(loop_start, len(unique_dates), self.step_days):
+            idx_train_start = i - self.embargo_days - self.train_days
+            idx_train_end = i - self.embargo_days - 1
             
             idx_test_start = i
-            idx_test_end = min(i + self.dias_paso - 1, len(fechas_unicas) - 1)
+            idx_test_end = min(i + self.step_days - 1, len(unique_dates) - 1)
             
-            fecha_inicio_train = fechas_unicas[idx_train_start]
-            fecha_fin_train = fechas_unicas[idx_train_end]
-            fecha_inicio_test = fechas_unicas[idx_test_start]
-            fecha_fin_test = fechas_unicas[idx_test_end]
+            train_mask = (panel_df.index >= unique_dates[idx_train_start]) & (panel_df.index <= unique_dates[idx_train_end])
+            test_mask = (panel_df.index >= unique_dates[idx_test_start]) & (panel_df.index <= unique_dates[idx_test_end])
             
-            train_mask = (df_panel.index >= fecha_inicio_train) & (df_panel.index <= fecha_fin_train)
-            test_mask = (df_panel.index >= fecha_inicio_test) & (df_panel.index <= fecha_fin_test)
+            train_df = panel_df.loc[train_mask].copy()
+            test_df = panel_df.loc[test_mask].copy()
             
-            df_train = df_panel.loc[train_mask].copy()
-            df_test = df_panel.loc[test_mask].copy()
-            
-            if len(df_train) < 100 or len(df_test) < 5:
+            if len(train_df) < 100 or len(test_df) < 5:
                 continue 
                 
             target_maker = TargetEngineer(q_high=self.q_high, q_low=self.q_low)
-            df_train = target_maker.fit_transform(df_train)
-            df_test = target_maker.transform(df_test)
+            train_df = target_maker.fit_transform(train_df)
+            test_df = target_maker.transform(test_df)
             
-            cols_a_borrar = ['target', 'fwd_log_return', 'close', 'ticker']
-            X_train = df_train.drop(columns=cols_a_borrar, errors='ignore')
-            y_train = df_train['target']
-            X_test = df_test.drop(columns=cols_a_borrar, errors='ignore')
-            y_test = df_test['target']
+            drop_cols = ['target', 'fwd_log_return', 'close', 'ticker', 'date']
+            X_train = train_df.drop(columns=drop_cols, errors='ignore')
+            y_train = train_df['target']
+            X_test = test_df.drop(columns=drop_cols, errors='ignore')
+            y_test = test_df['target']
             
-            # --- FEATURE SELECTION DINÁMICO ---
-            # Elegimos las 15 mejores variables de ESTA ventana temporal
+            # --- DYNAMIC FEATURE SELECTION ---
+            # Selects the top predictive features exclusively for this specific temporal regime
             top_cols = selector.select(X_train, y_train)
             X_train = X_train[top_cols]
             X_test = X_test[top_cols]
@@ -67,27 +98,27 @@ class WalkForwardBacktester:
             model.fit(X_train, y_train)
             
             probs = model.predict_proba(X_test)
-            clases = model.classes_
-            idx_venta = np.where(clases == -1)[0][0]
-            idx_compra = np.where(clases == 1)[0][0]
+            classes = model.classes_
+            idx_sell = np.where(classes == -1)[0][0]
+            idx_buy = np.where(classes == 1)[0][0]
             
             preds = np.zeros(len(probs))
             
-            # Usamos los umbrales dinámicos de Optuna (borré el 0.60 fijo que tenías)
-            preds[probs[:, idx_compra] >= umbral_compra] = 1
-            preds[probs[:, idx_venta] >= umbral_venta] = -1
+            # Dynamic boundaries assigned by Optuna (or defaults)
+            preds[probs[:, idx_buy] >= buy_threshold] = 1
+            preds[probs[:, idx_sell] >= sell_threshold] = -1
             
-            df_res = pd.DataFrame({
-                'ticker': df_test['ticker'],
+            res_df = pd.DataFrame({
+                'ticker': test_df['ticker'],
                 'y_true': y_test,
                 'y_pred': preds,
-                'fwd_log_return': df_test['fwd_log_return']
-            }, index=df_test.index)
+                'fwd_log_return': test_df['fwd_log_return']
+            }, index=test_df.index)
             
-            resultados_bloques.append(df_res)
-            ultimo_modelo = model
+            block_results.append(res_df)
+            last_model = model
 
-        df_resultados_total = pd.concat(resultados_bloques)
-        print(f"Backtest finalizado. {len(df_resultados_total)} operaciones simuladas.")
+        total_results_df = pd.concat(block_results)
+        print(f"Backtest completed. Evaluated {len(total_results_df)} simulated trades across OOS blocks.")
         
-        return df_resultados_total, ultimo_modelo
+        return total_results_df, last_model

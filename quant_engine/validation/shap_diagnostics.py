@@ -2,55 +2,63 @@ import shap
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Tuple, Any
 
 class ShapExplainer:
+    """
+    Generates SHAP (SHapley Additive exPlanations) values to interpret model decisions.
+    
+    Provides a game-theoretic approach to explain the output of the LightGBM trees,
+    mapping the marginal contribution of each feature to the final prediction.
+    """
     def __init__(self):
         pass
 
-    def generate_diagnostics(self, model, df_panel, class_index=0):
+    def generate_diagnostics(self, model: Any, panel_df: pd.DataFrame, class_index: int = 0) -> Tuple[pd.DataFrame, plt.Figure]:
         """
-        Genera diagnósticos SHAP auto-alineando las columnas.
-        class_index=0 es la clase -1 (Venta).
+        Auto-aligns features and computes global feature importance via SHAP magnitude.
+
+        Args:
+            model (Any): The fitted LightGBM model.
+            panel_df (pd.DataFrame): The feature dataset.
+            class_index (int): Index of the target class to explain (default 0 corresponds to SELL).
+
+        Returns:
+            Tuple[pd.DataFrame, plt.Figure]: SHAP summary dataframe and the matplotlib figure.
         """
-        print("\n--- GENERANDO DIAGNÓSTICOS SHAP ---")
+        print("\n--- GENERATING SHAP DIAGNOSTICS ---")
         
-        # 1. El modelo es la fuente de verdad
-        features_usadas = model.feature_name_
+        used_features = model.feature_name_
         
-        # 2. Filtramos el panel usando solo esas columnas (Alineación perfecta garantizada)
-        # Y NO TOCAMOS los tipos de datos. Dejamos la categoría intacta.
-        X_sample = df_panel[features_usadas].tail(1000).copy()
+        # Filter panel preserving exact column order and dtypes
+        X_sample = panel_df[used_features].tail(1000).copy()
         
-        # 3. Calcular Valores SHAP
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_sample)
         
-        # Manejo robusto de la salida de SHAP multiclase
+        # Robust handling for multiclass SHAP structures across different shap versions
         if isinstance(shap_values, list):
-            shap_clase_riesgo = shap_values[class_index]
+            target_class_shap = shap_values[class_index]
         elif len(shap_values.shape) == 3:
             if shap_values.shape[2] == len(model.classes_):
-                shap_clase_riesgo = shap_values[:, :, class_index]
+                target_class_shap = shap_values[:, :, class_index]
             else:
-                shap_clase_riesgo = shap_values[:, class_index, :]
+                target_class_shap = shap_values[:, class_index, :]
         else:
-            shap_clase_riesgo = shap_values
+            target_class_shap = shap_values
             
-        # 4. Generar el DataFrame Numérico
-        mean_abs_shap = np.abs(shap_clase_riesgo).mean(axis=0)
+        mean_abs_shap = np.abs(target_class_shap).mean(axis=0)
         
-        df_shap_importance = pd.DataFrame({
-            'feature': features_usadas,
+        shap_importance_df = pd.DataFrame({
+            'feature': used_features,
             'shap_mean_impact': mean_abs_shap
-        })
-        df_shap_importance = df_shap_importance.sort_values('shap_mean_impact', ascending=False).reset_index(drop=True)
+        }).sort_values('shap_mean_impact', ascending=False).reset_index(drop=True)
         
-        # 5. Generar el Gráfico Visual
-        fig_shap, ax_shap = plt.subplots(figsize=(10, 6))
-        shap.summary_plot(shap_clase_riesgo, X_sample, show=False)
-        plt.title(f"Impacto SHAP - Clase Venta (-1)")
+        shap_fig, shap_ax = plt.subplots(figsize=(10, 6))
+        shap.summary_plot(target_class_shap, X_sample, show=False)
+        plt.title(f"SHAP Impact Summary - Class Index {class_index}")
         plt.tight_layout()
         
-        print("Diagnósticos SHAP calculados con éxito.")
+        print("SHAP diagnostics successfully computed.")
         
-        return df_shap_importance, fig_shap
+        return shap_importance_df, shap_fig

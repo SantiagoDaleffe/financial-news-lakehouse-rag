@@ -37,6 +37,7 @@ class NewsItem(BaseModel):
     text: str
     published_at: float 
     url: str
+    tickers: list[str] = []
     
 @router.post('/ingest')
 def ingest_news(item: NewsItem):
@@ -59,6 +60,7 @@ def ingest_news(item: NewsItem):
             "text": item.text,
             "url": item.url,
             "published_at": item.published_at,
+            "tickers": item.tickers,
             "ingested_at": today.isoformat(),
             "source": "api_ingestion"
         }

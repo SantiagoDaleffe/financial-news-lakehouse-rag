@@ -1,0 +1,46 @@
+{
+    "buy_threshold": 0.4418490104448511,
+    "sell_threshold": 0.5264213424699449,
+    "bull_limit": 0.0053093753051493085,
+    "bear_limit": -0.005749496635898443,
+    "q_high_original": 0.693799087600558,
+    "q_low_original": 0.25020639959880264,
+    "req_train_days": 252,
+    "req_step_days": 20,
+    "req_embargo_days": 5,
+    "req_features": [
+        "vix_return",
+        "natr_14",
+        "ret_5d",
+        "upper_shadow",
+        "vix_divergence",
+        "ret_10d",
+        "lower_shadow",
+        "vol_shock_z",
+        "candle_body",
+        "ret_3d",
+        "price_accel_1d",
+        "bb_width",
+        "rsi_14",
+        "ret_1d",
+        "macd_hist"
+    ],
+    "lgb_params": {
+        "objective": "multiclass",
+        "num_class": 3,
+        "learning_rate": 0.05845460888583364,
+        "max_depth": 6,
+        "n_estimators": 171,
+        "num_leaves": 17,
+        "random_state": 1,
+        "min_child_samples": 78,
+        "verbosity": -1,
+        "reg_alpha": 1.2314755895165377,
+        "reg_lambda": 7.0286214519678305,
+        "class_weight": {
+            "-1": 1.8039724530062737,
+            "0": 1.2888522813537968,
+            "1": 1.400465297257751
+        }
+    }
+}

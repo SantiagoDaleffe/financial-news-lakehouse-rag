@@ -1,2 +1,13 @@
 yfinance
 pandas
+numpy
+chromadb==0.4.24
+google-genai
+lightgbm
+shap
+joblib
+mlflow
+scikit-learn
+yfinance
+email-validator>=2.0.0
+optuna

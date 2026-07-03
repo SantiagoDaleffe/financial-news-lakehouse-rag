@@ -8,6 +8,8 @@ import hashlib
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from transformers import pipeline
 
+MAX_RETRIES = 3
+
 chroma_host = os.getenv("CHROMA_HOST")
 chroma_port = os.getenv("CHROMA_PORT")
 
@@ -46,6 +48,13 @@ while True:
         time.sleep(5)
         
 channel = connection.channel()
+channel.queue_declare(queue="news_dlq", durable=True)
+retry_args = {
+    "x-dead-letter-exchange": "",
+    "x-dead-letter-routing-key": "news_queue",
+    "x-message-ttl": 10000 
+}
+channel.queue_declare(queue="news_retry_queue", durable=True, arguments=retry_args)
 channel.queue_declare(queue="news_queue", durable=True)
 
 text_splitter = RecursiveCharacterTextSplitter(
@@ -55,60 +64,75 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 
 def callback(ch, method, properties, body):
+    headers = properties.headers or {}
+    retry_count = headers.get('retry_count', 0)
+    
     try:
-        payload = json.loads(body.decode())
-        text = payload.get("text", "")
-        published_at = payload.get("published_at", 0.0)
-        news_url = payload.get("url", "")
-    except Exception as e:
-        print("Error parsing JSON from RabbitMQ:", str(e), flush=True)
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-        return
-
-    chunks = text_splitter.split_text(text)
-    print("received text split into", len(chunks), "chunks processing...", flush=True)
-    
-    batch_embeddings = []
-    batch_documents = []
-    batch_metadatas = []
-    batch_ids = []
-    
-    for i, chunk in enumerate(chunks):
-        embedding = model.encode(chunk).tolist()
-        
         try:
-            sent_result = sentiment_model(chunk[:512])[0]
-            sentiment_label = sent_result['label']
-            sentiment_score = sent_result['score']
+            payload = json.loads(body.decode())
+            text = payload.get("text", "")
+            published_at = payload.get("published_at", 0.0)
+            news_url = payload.get("url", "")
+            tickers = payload.get("tickers", [])
         except Exception as e:
-            print("error analyzing sentiment fallback to unknown", str(e), flush=True)
+            print("Error parsing JSON from RabbitMQ:", str(e), flush=True)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+
+        if not tickers:
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+
+        try:
+            sent_result = sentiment_model(text[:512])[0]
+            sentiment_label = sent_result['label'].upper()
+            sentiment_score = float(sent_result['score'])
+        except Exception:
             sentiment_label = 'UNKNOWN'
             sentiment_score = 0.0
             
-        uid = hashlib.md5(f"{chunk}_{i}".encode('utf-8')).hexdigest()    
-        batch_embeddings.append(embedding)
-        batch_documents.append(chunk)
-        batch_ids.append(uid)
+
+        chunks = text_splitter.split_text(text)
+        batch_embeddings, batch_documents, batch_metadatas, batch_ids = [], [], [], []
         
-        batch_metadatas.append({
-            'source': 'news_api',
-            'url': news_url,
-            'published_at': float(published_at),
-            'sentiment': sentiment_label,
-            'sentiment_score': float(sentiment_score)
-        })
-    
-    collection.add(
-        embeddings=batch_embeddings,
-        documents=batch_documents,
-        metadatas=batch_metadatas,
-        ids=batch_ids
-    )
-    
-    print("stored", len(batch_ids), "chunks with sentiment data in chromadb", flush=True)
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+        for i, chunk in enumerate(chunks):
+            embedding = model.encode(chunk).tolist()
+            uid = hashlib.md5(f"{chunk}_{i}_{published_at}".encode('utf-8')).hexdigest()
+            batch_embeddings.append(embedding)
+            batch_documents.append(chunk)
+            batch_ids.append(uid)
+            
+            batch_metadatas.append({
+                'source': 'news_api',
+                'url': news_url,
+                'published_at': float(published_at),
+                'sentiment': sentiment_label,
+                'sentiment_score': sentiment_score,
+                'ticker_principal': tickers[0],
+                'tickers_relacionados': ",".join(tickers)
+            })
+            
+        if batch_ids:
+            collection.add(
+                embeddings=batch_embeddings, documents=batch_documents,
+                metadatas=batch_metadatas, ids=batch_ids
+            )
+            print(f"Stored {len(batch_ids)} chunks for {tickers} | Sentiment: {sentiment_label}", flush=True)
+        
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
+    except Exception as e:
+        print(f"CRITICAL ERROR {str(e)}", flush=True)
+        if retry_count < MAX_RETRIES:
+            headers['retry_count'] = retry_count + 1
+            properties.headers = headers
+            ch.basic_publish(exchange='', routing_key='news_retry_queue', body=body, properties=properties)
+        else:
+            ch.basic_publish(exchange='', routing_key='news_dlq', body=body, properties=properties)
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+channel.basic_qos(prefetch_count=1)
 channel.basic_consume(queue="news_queue", on_message_callback=callback, auto_ack=False)
-
-print("worker ready waiting for messages...", flush=True)
 channel.start_consuming()

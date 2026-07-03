@@ -1,15 +1,12 @@
-# Datos y Modelos
 *.parquet
 *.pkl
 *.csv
 quant_engine/data/raw/
 
-# Tracking de Experimentos
 mlruns/
 *.db
 *.sqlite
 
-# Entornos y Python
 __pycache__/
 *.pyc
 .env

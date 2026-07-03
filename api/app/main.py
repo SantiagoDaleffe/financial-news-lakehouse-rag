@@ -5,7 +5,6 @@ import os
 from dotenv import load_dotenv
 from .models import Base
 from .routers import ingestion, agent, system, alerts, research, chats
-from .security import router as auth_router
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -76,4 +75,3 @@ app.include_router(agent.router, prefix="/api/v1")
 app.include_router(alerts.router, prefix="/api/v1/alerts")
 app.include_router(research.router, prefix="/api/v1/research")
 app.include_router(chats.router, prefix="/api/v1/chats")
-app.include_router(auth_router, prefix="/api/v1/auth")
