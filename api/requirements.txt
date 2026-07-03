@@ -1,16 +1,15 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
-
+python-dotenv
 fastapi==0.129.0
 pydantic==2.12.5
 uvicorn==0.41.0
 pika==1.3.2
-chromadb==0.4.24
+pinecone
 sentence-transformers==2.5.1
 torch
 numpy<2.0.0
 google-genai
 boto3==1.34.40
-mlflow==2.7.0
 yfinance
 psycopg2-binary
 sqlalchemy
@@ -18,3 +17,4 @@ requests
 PyJWT==2.8.0
 python-multipart
 slowapi
+mlflow

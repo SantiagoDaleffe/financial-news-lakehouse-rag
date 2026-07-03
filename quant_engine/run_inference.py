@@ -2,9 +2,11 @@ import os
 import json
 import pandas as pd
 import numpy as np
-from datetime import date, datetime, timedelta
+import logging
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine, text
-import chromadb
+from pinecone import Pinecone
+from sentence_transformers import SentenceTransformer
 from google import genai
 from google.genai import types
 import joblib
@@ -14,27 +16,19 @@ from typing import List, Dict, Any
 
 from features.feature_engineering import TechnicalFeatureEngineer
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    try:
-        from airflow.configuration import conf
-        DATABASE_URL = conf.get('database', 'sql_alchemy_conn')
-    except ImportError:
-        pass
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://")
 
-CHROMA_HOST = os.getenv("CHROMA_HOST", "chromadb")
-CHROMA_PORT = os.getenv("CHROMA_PORT", "8000")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(BASE_DIR, "models", "etf", "production")
 
 
 def reconcile_yesterday_predictions(logical_date_str: str) -> str:
-    """
-    Sweeps the database for any pending predictions made strictly prior to the current logical date,
-    and matches them against the next available closing price to compute realized returns.
-    """
     engine = create_engine(DATABASE_URL)
     target_date = datetime.strptime(logical_date_str, "%Y-%m-%d").date()
     
@@ -47,8 +41,7 @@ def reconcile_yesterday_predictions(logical_date_str: str) -> str:
     if df_pending.empty:
         return f"No pending predictions to reconcile prior to {target_date}."
         
-    model_dir = "/opt/airflow/quant_engine/models/etf/production"
-    with open(os.path.join(model_dir, "quant_config.json"), "r") as f:
+    with open(os.path.join(MODEL_DIR, "quant_config.json"), "r") as f:
         config = json.load(f)
         
     bull_limit = config.get("bull_limit", 0.002)
@@ -117,13 +110,9 @@ def reconcile_yesterday_predictions(logical_date_str: str) -> str:
 
 
 def build_features(logical_date_str: str) -> List[Dict[str, Any]]:
-    """
-    Extracts data filtering up to the execution date context to preserve idempotency during backfills.
-    """
     engine = create_engine(DATABASE_URL)
     target_date = datetime.strptime(logical_date_str, "%Y-%m-%d").date()
     
-    # Limit data loading up to target_date to guarantee identical historical state recalculation
     query = text("""
         SELECT * FROM market_data 
         WHERE date >= :target_date - interval '300 days' AND date <= :target_date
@@ -131,7 +120,7 @@ def build_features(logical_date_str: str) -> List[Dict[str, Any]]:
     raw_df = pd.read_sql(query, engine, params={"target_date": target_date})
     
     if raw_df.empty:
-        print(f"CRITICAL: No market data found in Postgres up to {target_date}.")
+        logging.error(f"CRITICAL: No market data found in Postgres up to {target_date}.")
         return []
         
     vix_df = raw_df[raw_df['ticker'] == 'VIX'].copy().set_index('date')
@@ -155,22 +144,17 @@ def build_features(logical_date_str: str) -> List[Dict[str, Any]]:
 
 
 def run_quant_model(daily_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Injects daily features into the LightGBM model, applies dynamic probability thresholds,
-    and extracts SHAP feature importances. Bypasses SHAP calculation for COLD assets to save CPU.
-    """
     if not daily_data: 
         return []
     
     df_today = pd.DataFrame(daily_data)
-    model_dir = "/opt/airflow/quant_engine/models/etf/production" 
     
     try:
-        model = joblib.load(os.path.join(model_dir, "etf_baseline_1.joblib"))
-        with open(os.path.join(model_dir, "quant_config.json"), "r") as f:
+        model = joblib.load(os.path.join(MODEL_DIR, "etf_baseline_1.joblib"))
+        with open(os.path.join(MODEL_DIR, "quant_config.json"), "r") as f:
             config = json.load(f)
     except FileNotFoundError as e:
-        print(f"Artifacts missing: {e}")
+        logging.error(f"Artifacts missing: {e}")
         return []
         
     buy_thresh = config.get('buy_threshold')
@@ -216,8 +200,6 @@ def run_quant_model(daily_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         
         top_drivers = ["N/A"]
         
-        # Only spend CPU calculating SHAP for assets we might actually trade
-        # Optimization: Extract SHAP values strictly for non-neutral patterns to safeguard execution time
         if conviction_zone != "COLD":
             shap_values = explainer.shap_values(X_input)
             if isinstance(shap_values, list):
@@ -253,35 +235,19 @@ def run_quant_model(daily_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def fetch_news_context(signals: List[Dict[str, Any]], logical_date_str: str) -> List[Dict[str, Any]]:
-    """
-    Queries ChromaDB for macroeconomic context up to the logical date to preserve idempotency.
-    Calculates the 'Information Decay' (days ago) for the LLM to weight relevance.
-    """
     if not signals: 
         return []
     
-    client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-    collection = client.get_or_create_collection(name="fin_news_v1")
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
+    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
     
     target_date = datetime.strptime(logical_date_str, "%Y-%m-%d")
     target_timestamp = target_date.timestamp()
     window_start = (target_date - timedelta(days=4)).timestamp()
     
-    try:
-        # Idempotent query: strictly fetch news published BEFORE or ON the target execution date
-        recent_news = collection.get(
-            where={
-                "$and": [
-                    {"published_at": {"$gte": window_start}},
-                    {"published_at": {"$lte": target_timestamp + 86400}} # End of target day
-                ]
-            }
-        )
-    except Exception as e:
-        print(f"Error querying ChromaDB: {e}")
-        recent_news = None
-    
     enriched_signals = []
+    
     for sig in signals:
         ticker = sig['ticker']
         
@@ -291,31 +257,50 @@ def fetch_news_context(signals: List[Dict[str, Any]], logical_date_str: str) -> 
             enriched_signals.append(sig)
             continue
             
+        try:
+            search_query = f"{ticker} financial market news economy"
+            embedding = model.encode(search_query).tolist()
+            
+            results = index.query(
+                vector=embedding,
+                top_k=15, 
+                filter={
+                    "published_at": {"$gte": window_start, "$lte": target_timestamp + 86400}
+                },
+                include_metadata=True,
+                namespace="fin_news_v1"
+            )
+            matches = results.get('matches', [])
+        except Exception as e:
+            logging.error(f"Error querying Pinecone for {ticker}: {e}")
+            matches = []
+            
         ticker_news = []
-        if recent_news and recent_news.get('documents'):
-            for doc, meta in zip(recent_news['documents'], recent_news['metadatas']):
-                is_match = False
-                for key in ['ticker', 'tickers', 'ticker_principal', 'matched_tickers']:
-                    if key in meta and ticker in str(meta[key]):
-                        is_match = True
-                        break
-                        
-                if is_match:
-                    pub_ts = meta.get('published_at', target_timestamp)
-                    days_ago = max(0, round((target_timestamp - pub_ts) / 86400))
+        for match in matches:
+            meta = match.get('metadata', {})
+            
+            is_match = False
+            for key in ['ticker', 'tickers', 'ticker_principal', 'matched_tickers']:
+                if key in meta and ticker in str(meta[key]):
+                    is_match = True
+                    break
                     
-                    if days_ago == 0:
-                        age_str = "TODAY"
-                    elif days_ago == 1:
-                        age_str = "1 DAY AGO"
-                    else:
-                        age_str = f"{days_ago} DAYS AGO"
-                        
-                    sentiment = meta.get('sentiment', 'NEUTRAL')
-                    score = meta.get('sentiment_score', 0.0)
+            if is_match:
+                pub_ts = meta.get('published_at', target_timestamp)
+                days_ago = max(0, round((target_timestamp - pub_ts) / 86400))
+                
+                if days_ago == 0:
+                    age_str = "TODAY"
+                elif days_ago == 1:
+                    age_str = "1 DAY AGO"
+                else:
+                    age_str = f"{days_ago} DAYS AGO"
                     
-                    # Pre-pend the temporal tag to the document string
-                    ticker_news.append(f"- [AGE: {age_str}] {doc} [FinBERT: {sentiment} (Score: {score:.2f})]")
+                sentiment = meta.get('sentiment', 'NEUTRAL')
+                score = meta.get('sentiment_score', 0.0)
+                doc = meta.get('text', '')
+                
+                ticker_news.append(f"- [AGE: {age_str}] {doc} [FinBERT: {sentiment} (Score: {score:.2f})]")
         
         if ticker_news:
             sig['news_context'] = "\n".join(ticker_news)
@@ -330,10 +315,6 @@ def fetch_news_context(signals: List[Dict[str, Any]], logical_date_str: str) -> 
 
 
 def evaluate_signals_and_persist(enriched_signals: List[Dict[str, Any]], logical_date_str: str) -> None:
-    """
-    Executes the LLM API only for valid candidates, generates Audit Trails in MLflow, 
-    and persists 100% of the cross-section to Postgres.
-    """
     if not enriched_signals: 
         return
         
@@ -355,9 +336,7 @@ def evaluate_signals_and_persist(enriched_signals: List[Dict[str, Any]], logical
             csv_snapshot = df_snapshot.to_csv(index=False)
             mlflow.log_text(csv_snapshot, f"data_health/daily_features_snapshot.csv")
             
-            
         for sig in enriched_signals:
-            
             call_llm = False
             if sig['conviction_zone'] == "HOT":
                 call_llm = True
@@ -399,11 +378,11 @@ def evaluate_signals_and_persist(enriched_signals: List[Dict[str, Any]], logical
                             break
                             
                 except Exception as e:
-                    print(f"LLM failure for {sig['ticker']}: {e}. Defaulting to HOLD.")
+                    logging.error(f"LLM failure for {sig['ticker']}: {e}. Defaulting to HOLD.")
                     final_decision = "HOLD"
             else:
                 final_decision = "HOLD"
-                print(f"[{sig['ticker']}] Bypassing LLM (Zone: {sig['conviction_zone']}, News: {sig.get('has_news', False)}). Verdict: HOLD")
+                logging.info(f"[{sig['ticker']}] Bypassing LLM (Zone: {sig['conviction_zone']}, News: {sig.get('has_news', False)}). Verdict: HOLD")
 
             audit_md = f"""# Neurosymbolic Audit Trail - {sig['ticker']} ({target_date})
             
@@ -424,10 +403,8 @@ def evaluate_signals_and_persist(enriched_signals: List[Dict[str, Any]], logical
             mlflow.log_metric(f"{sig['ticker']}_quant_prob", float(sig['probability']))
             mlflow.log_text(audit_md, f"audits/{sig['ticker']}_audit.md")
             
-
             try:
                 with engine.begin() as conn:
-                    # FIX POSTGRES: Borramos primero por Signal Date para pisar versiones previas o corridas desfasadas
                     delete_cmd = text("""
                         DELETE FROM predictions_history 
                         WHERE signal_date = :signal_date AND ticker = :ticker
@@ -451,4 +428,26 @@ def evaluate_signals_and_persist(enriched_signals: List[Dict[str, Any]], logical
                         "llm_verdict": final_decision
                     })
             except Exception as db_e:
-                print(f"DB persistence failed for {sig['ticker']}: {db_e}")
+                logging.error(f"DB persistence failed for {sig['ticker']}: {db_e}")
+
+if __name__ == "__main__":
+    execution_date = datetime.utcnow().strftime("%Y-%m-%d")
+    logging.info(f"Starting Inference Pipeline for date: {execution_date} ---")
+    
+    logging.info("1. Reconciling yesterday's predictions with actual market data.")
+    recon_result = reconcile_yesterday_predictions(execution_date)
+    logging.info(recon_result)
+    
+    logging.info("2. Building features for today's inference.")
+    features = build_features(execution_date)
+    
+    logging.info("3. Running Quant Inference.")
+    raw_signals = run_quant_model(features)
+    
+    logging.info("4. Fetching news context for each signal.")
+    context_signals = fetch_news_context(raw_signals, execution_date)
+    
+    logging.info("5. Evaluating with LLM and saving to Postgres.")
+    evaluate_signals_and_persist(context_signals, execution_date)
+    
+    logging.info("Pipeline completed successfully.")

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 import numpy as np
-import chromadb
+from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 import os
 import time
@@ -25,27 +25,15 @@ mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 mlflow.set_experiment("rag_search_experiment")
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-chroma_host = os.getenv("CHROMA_HOST")
-chroma_port = os.getenv("CHROMA_PORT")
 
 
-print("connecting to chromadb...", flush=True)
-chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
-
-while True:
-    try:
-        chroma_client.heartbeat()
-        print("connected to chromadb", flush=True)
-        break
-    except Exception as e:
-        print(f"connection failed {e} retrying in 5s", flush=True)
-        time.sleep(5)
-
-collection = chroma_client.get_or_create_collection(name="fin_news_v1")
+print("Connecting to Pinecone...", flush=True)
+pinecone = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pinecone.Index(os.getenv("PINECONE_INDEX_NAME"))
 
 print("loading sentence transformer model...", flush=True)
 model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-cache = SemanticCache(chroma_client, model)
+cache = SemanticCache(pinecone, model)
 
 COMPLEX_PROTOTYPES = [
     "do a comparative analysis",
@@ -108,25 +96,30 @@ async def run_agent_with_history(query: str, message_history, user_id: str, mode
         print('Transactional query detected. Avoiding semantic caching for security.', flush=True)
     
     embedding = model.encode(query).tolist()
-    results = collection.query(query_embeddings=[embedding], n_results=5)
+    results = index.query(
+        vector=embedding, 
+        top_k=5, 
+        include_metadata=True,
+        namespace="fin_news_v1"
+    )
+    
+    matches = results.get("matches", [])
 
-    docs = results.get("documents", [[]])[0]
-    if not docs:
+    if not matches:
         context = "No recent news found in the local database."
         sources_data = []
     else:
-        documents = results["documents"][0]
-        metadatas = results["metadatas"][0]
+        documents = [m["metadata"]["text"] for m in matches]
         context = "\n- ".join(documents)
 
         sources_data = []
-        for doc, meta in zip(documents, metadatas):
-            safe_meta = meta or {}
+        for match in matches:
+            meta = match.get("metadata", {})
             sources_data.append(
                 {
-                    "text": doc,
-                    "sentiment": safe_meta.get("sentiment", "unknown"),
-                    "sentiment_score": safe_meta.get("sentiment_score", 0.0),
+                    "text": meta.get("text", ""),
+                    "sentiment": meta.get("sentiment", "unknown"),
+                    "sentiment_score": meta.get("sentiment_score", 0.0),
                 }
             )
 

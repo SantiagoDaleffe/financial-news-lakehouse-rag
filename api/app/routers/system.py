@@ -1,7 +1,11 @@
 from fastapi import APIRouter
-from .agent import collection
+import os
+from pinecone import Pinecone
 
 router = APIRouter(tags=["system"])
+
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
 
 @router.get("/health")
 def health():
@@ -10,17 +14,6 @@ def health():
 
 @router.get('/database-info')
 def database_info():
-    """Returns basic stats from the vector database including all metadata."""
-    count = collection.count()
-    data = collection.get(limit=5)
-    
-    sample = []
-    if data and data.get("documents"):
-        for doc, meta, doc_id in zip(data["documents"], data["metadatas"], data["ids"]):
-            sample.append({
-                "id": doc_id,
-                "document": doc[:150] + "...",
-                "metadata": meta
-            })
-            
-    return {"total_items": count, "sample_data": sample}
+    """Returns exact vector counts per namespace directly from Pinecone."""
+    stats = index.describe_index_stats()
+    return {"stats": stats.to_dict()}

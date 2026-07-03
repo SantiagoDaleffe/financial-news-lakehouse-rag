@@ -7,7 +7,8 @@ import os
 import hashlib
 import time
 from datetime import datetime
-import chromadb
+from datetime import timezone, timedelta
+from pinecone import Pinecone
 
 router = APIRouter(tags=["ingestion"])
 
@@ -21,17 +22,9 @@ s3_client = boto3.client(
 
 bucket_name = os.getenv("S3_BUCKET_NAME")
 rabbitmq_url = os.getenv('RABBITMQ_URL')
-chroma_host = os.getenv("CHROMA_HOST")
 
-chroma_client = None
-news_collection = None
-
-def get_chroma_collection():
-    global chroma_client, news_collection
-    if news_collection is None:
-        chroma_client = chromadb.HttpClient(host=chroma_host, port=8000)
-        news_collection = chroma_client.get_or_create_collection(name="fin_news_v1")
-    return news_collection
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
 
 class NewsItem(BaseModel):
     text: str
@@ -85,18 +78,35 @@ def ingest_news(item: NewsItem):
 
 @router.delete('/prune')
 def prune_old_news(days: int = 30):
-    """
-    Physically remove from ChromaDB all vectors older than 'days'.
-    """
     cutoff_timestamp = time.time() - (days * 86400)
     
+    try:
+        index.delete(filter={"published_at": {"$lt": cutoff_timestamp}}, namespace="fin_news_v1")
+    except Exception as e:
+        print(f"Error pruning Pinecone news: {e}", flush=True)
 
-    col = get_chroma_collection()
-    
-    col.delete(
-        where={"published_at": {"$lt": cutoff_timestamp}}
-    )
-    
-    print(f"Purge completed: News older than {days} days has been removed.", flush=True)
+    try:
+        index.delete(filter={"timestamp": {"$lt": cutoff_timestamp}}, namespace="semantic_cache_v1")
+    except Exception as e:
+        print(f"Error pruning Pinecone cache: {e}", flush=True)
+
+    try:
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        paginator = s3_client.get_paginator('list_objects_v2')
+        deleted_s3 = 0
+        
+        for page in paginator.paginate(Bucket=bucket_name, Prefix='raw/news/'):
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    if obj['LastModified'] < cutoff_date:
+                        s3_client.delete_object(Bucket=bucket_name, Key=obj['Key'])
+                        deleted_s3 += 1
+                        
+        print(f"S3 prune completed. Deleted {deleted_s3} raw files.", flush=True)
+    except Exception as e:
+        print(f"Error during S3 pruning: {str(e)}", flush=True)
+        return {"status": "error", "message": str(e)}
+
+    print(f"Purge completed: Data older than {days} days has been removed.", flush=True)
     return {"status": "ok", "deleted_older_than_days": days}
 

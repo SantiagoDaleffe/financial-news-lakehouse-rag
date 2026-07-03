@@ -19,34 +19,29 @@ services:
         condition: service_started
       minio:
         condition: service_started
-      mlflow:
-        condition: service_started
-      airflow-postgres:
-        condition: service_healthy
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - S3_ENDPOINT_URL=http://minio:9000
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow_secure_pass_replace_me}@airflow-postgres:5432/${POSTGRES_DB:-airflow}
+      - DATABASE_URL=${DATABASE_URL}
       - GIT_PYTHON_REFRESH=quiet
-      - CHROMA_HOST=${CHROMA_HOST}
-      - CHROMA_PORT=${CHROMA_PORT}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - MLFLOW_TRACKING_USERNAME=${MLFLOW_TRACKING_USERNAME}
+      - MLFLOW_TRACKING_PASSWORD=${MLFLOW_TRACKING_PASSWORD}
 
   alert-worker:
     build: ./api
     command: python app/alert_worker.py
-    depends_on:
-      airflow-postgres:
-        condition: service_healthy
     dns:
       - 8.8.8.8
       - 8.8.4.4
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow_secure_pass_replace_me}@airflow-postgres:5432/${POSTGRES_DB:-airflow}
+      - DATABASE_URL=${DATABASE_URL}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     extra_hosts:
@@ -59,14 +54,8 @@ services:
       - minio
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
-      - CHROMA_HOST=${CHROMA_HOST}
-      - CHROMA_PORT=${CHROMA_PORT}
-  chromadb:
-    image: chromadb/chroma:0.4.24
-    ports:
-      - "8001:8000"
-    volumes:
-      - ./chroma_data:/chroma/chroma
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
 
   minio:
     image: minio/minio:latest
@@ -79,92 +68,3 @@ services:
     volumes:
       - ./minio_data:/data
     command: server /data --console-address ":9001"
-
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.10.2
-    ports:
-      - "5000:5000"
-    environment:
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-      - AWS_DEFAULT_REGION=us-east-1
-    volumes:
-      - ./mlflow_data:/mlflow_data
-    command: mlflow server --host 0.0.0.0 --backend-store-uri sqlite:///mlflow_data/mlflow.db --default-artifact-root s3://${S3_ARTIFACTS_BUCKET_NAME}/mlflow_artifacts
-
-  airflow-postgres:
-    image: postgres:13
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-airflow}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-airflow_secure_pass_replace_me}
-      - POSTGRES_DB=${POSTGRES_DB:-airflow}
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./airflow_data/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: [ "CMD", "pg_isready", "-U", "${POSTGRES_USER:-airflow}" ]
-      interval: 5s
-      retries: 5
-
-  airflow-init:
-    build: 
-      context: ./airflow
-      dockerfile: Dockerfile.airflow
-    environment:
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow_secure_pass_replace_me}@airflow-postgres/${POSTGRES_DB:-airflow}
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-    depends_on:
-      airflow-postgres:
-        condition: service_healthy
-    command: >
-      bash -c " airflow db migrate && airflow users create --username ${AIRFLOW_ADMIN_USERNAME:-admin} --firstname ${AIRFLOW_ADMIN_FIRSTNAME:-Admin} --lastname ${AIRFLOW_ADMIN_LASTNAME:-User} --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} --password ${AIRFLOW_ADMIN_PASSWORD:-admin_secure_pass_replace_me} "
-
-  airflow:
-    build:
-      context: ./airflow
-      dockerfile: Dockerfile.airflow
-    ports:
-      - "8080:8080"
-    environment:
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow_secure_pass_replace_me}@airflow-postgres/${POSTGRES_DB:-airflow}
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - NEWS_API_KEY=${NEWS_API_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow_secure_pass_replace_me}@airflow-postgres:5432/${POSTGRES_DB:-airflow}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - INGESTION_API_URL=http://api:8000/api/v1/ingest
-      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
-      - PYTHONPATH=/opt/airflow
-      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
-      - ./plugins:/opt/airflow/plugins
-      - ./quant_engine:/opt/airflow/quant_engine
-    command: bash -c "airflow webserver & airflow scheduler"
-    depends_on:
-      airflow-postgres:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
-      api:
-        condition: service_started
-
-  pgadmin:
-    image: dpage/pgadmin4
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@test.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin_secure_pass_replace_me}
-    ports:
-      - "5050:80"
-    volumes:
-      - ./servers.json:/pgadmin4/servers.json
-    depends_on:
-      airflow-postgres:
-        condition: service_healthy

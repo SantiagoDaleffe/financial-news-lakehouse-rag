@@ -1,32 +1,37 @@
 import hashlib
 import time
+import os
+from pinecone import Pinecone
 
 class SemanticCache:
-    def __init__(self, chroma_client, embedding_model, collection_name="semantic_cache_v1"):
-        """
-        Initializes the cache by connecting to the dedicated collection in ChromaDB.
-        """
+    def __init__(self, pc_client, embedding_model, namespace="semantic_cache_v1"):
         self.model = embedding_model
-        self.collection = chroma_client.get_or_create_collection(name=collection_name)
+        self.index = pc_client.Index(os.getenv("PINECONE_INDEX_NAME"))
+        self.namespace = namespace
 
     def check(self, query: str, threshold: float = 0.15, ttl_seconds: int=100):
         """
         Calculates the vector distance. If it is less than the threshold, it is a Cache Hit.
         """
         embedding = self.model.encode(query).tolist()
-        results = self.collection.query(
-            query_embeddings=[embedding],
-            n_results=1
+        results = self.index.query(
+            vector=embedding,
+            top_k=1,
+            include_metadata=True,
+            namespace=self.namespace
         )
 
-        if not results['documents'] or not results['documents'][0]:
+        if not results.get('matches'):
             return None
+        
+        match = results['matches'][0]
+        
+        distance = 1.0 - match['score']
 
-        distance = results['distances'][0][0]
         
         if distance < threshold:
-            metadata = results['metadatas'][0][0]
-            timestamp_saved = metadata.get('timestamp',0)
+            metadata = match['metadata']
+            timestamp_saved = metadata.get('timestamp', 0)
             actual_time = time.time()
             
             if (actual_time - timestamp_saved) > ttl_seconds:
@@ -46,10 +51,14 @@ class SemanticCache:
         embedding = self.model.encode(query).tolist()
         doc_id = hashlib.md5(query.encode('utf-8')).hexdigest()
         
-        self.collection.upsert(
-            ids=[doc_id],
-            embeddings=[embedding],
-            documents=[query],
-            metadatas=[{"response": response, "timestamp": time.time()}]
+        metadata = {
+            "response": response, 
+            "timestamp": time.time(),
+            "query_text": query
+        }
+        
+        self.index.upsert(
+            vectors=[(doc_id, embedding, metadata)], 
+            namespace=self.namespace
         )
         print("New answer saved in semantic cache.", flush=True)

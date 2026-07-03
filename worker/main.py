@@ -1,7 +1,7 @@
 import pika
 import os
 import time
-import chromadb
+from pinecone import Pinecone
 import json
 from sentence_transformers import SentenceTransformer
 import hashlib
@@ -10,28 +10,15 @@ from transformers import pipeline
 
 MAX_RETRIES = 3
 
-chroma_host = os.getenv("CHROMA_HOST")
-chroma_port = os.getenv("CHROMA_PORT")
-
 print("loading sentence transformer model...", flush=True)
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
 print("loading finbert sentiment model...", flush=True)
 sentiment_model = pipeline('text-classification', model='ProsusAI/finbert')
 
-print("connecting to chromadb...", flush=True)
-chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
-
-while True:
-    try:
-        chroma_client.heartbeat()
-        print("connected to chromadb ok", flush=True)
-        break
-    except Exception as e:
-        print("chromadb connection failed retrying in 5s...", str(e), flush=True)
-        time.sleep(5)
-
-collection = chroma_client.get_or_create_collection(name="fin_news_v1")
+print("Connecting to Pinecone...", flush=True)
+pinecone = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pinecone.Index(name=os.getenv("PINECONE_INDEX_NAME"))
 
 url = os.getenv("RABBITMQ_URL")
 params = pika.URLParameters(url)
@@ -95,16 +82,14 @@ def callback(ch, method, properties, body):
             
 
         chunks = text_splitter.split_text(text)
-        batch_embeddings, batch_documents, batch_metadatas, batch_ids = [], [], [], []
+        batch_vectors = []
         
         for i, chunk in enumerate(chunks):
             embedding = model.encode(chunk).tolist()
             uid = hashlib.md5(f"{chunk}_{i}_{published_at}".encode('utf-8')).hexdigest()
-            batch_embeddings.append(embedding)
-            batch_documents.append(chunk)
-            batch_ids.append(uid)
             
-            batch_metadatas.append({
+            metadata = {
+                'text': chunk, 
                 'source': 'news_api',
                 'url': news_url,
                 'published_at': float(published_at),
@@ -112,14 +97,12 @@ def callback(ch, method, properties, body):
                 'sentiment_score': sentiment_score,
                 'ticker_principal': tickers[0],
                 'tickers_relacionados': ",".join(tickers)
-            })
+            }
+            batch_vectors.append((uid, embedding, metadata))
             
-        if batch_ids:
-            collection.add(
-                embeddings=batch_embeddings, documents=batch_documents,
-                metadatas=batch_metadatas, ids=batch_ids
-            )
-            print(f"Stored {len(batch_ids)} chunks for {tickers} | Sentiment: {sentiment_label}", flush=True)
+        if batch_vectors:
+            index.upsert(vectors=batch_vectors, namespace="fin_news_v1")
+            print(f"Stored {len(batch_vectors)} chunks for {tickers} | Sentiment: {sentiment_label}", flush=True)
         
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
