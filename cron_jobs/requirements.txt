@@ -12,3 +12,4 @@ shap
 mlflow
 lightgbm
 torch
+optuna

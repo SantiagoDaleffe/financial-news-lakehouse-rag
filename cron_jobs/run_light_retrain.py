@@ -1,35 +1,30 @@
 import os
+import sys
 import pandas as pd
 import numpy as np
+import json
+import logging
 from datetime import datetime
 from sqlalchemy import create_engine, text
-from airflow.exceptions import AirflowSkipException
-from features.feature_engineering import TechnicalFeatureEngineer
-import json
 import lightgbm as lgb
 import joblib
 import mlflow
-import shutil
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.append(PROJECT_ROOT)
+sys.path.append(os.path.join(PROJECT_ROOT, "quant_engine"))
 
+MODEL_DIR = os.path.join(PROJECT_ROOT, "quant_engine", "models", "etf", "production")
+from features.feature_engineering import TechnicalFeatureEngineer
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    try:
-        from airflow.configuration import conf
-        DATABASE_URL = conf.get('database', 'sql_alchemy_conn')
-    except ImportError:
-        pass
-
 if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://")
 
 def check_drift_and_metrics(logical_date_str: str) -> bool:
-    """
-    Queries the last 20 active (non-HOLD) reconciled predictions to calculate the 
-    Actionable Win Rate of the LightGBM model. Raises AirflowSkipException if 
-    performance remains above the alert threshold.
-    """
     engine = create_engine(DATABASE_URL)
     target_date = datetime.strptime(logical_date_str, "%Y-%m-%d").date()
     
@@ -47,12 +42,12 @@ def check_drift_and_metrics(logical_date_str: str) -> bool:
         with engine.connect() as conn:
             df = pd.read_sql(query, conn, params={"target_date": target_date})
     except Exception as e:
-        print(f"Error accessing PostgreSQL: {e}")
+        logging.error(f"Error accessing PostgreSQL: {e}")
         return False
 
     if len(df) < 20:
-        print(f"Insufficient active history ({len(df)}/20 rows). Skipping retrain to preserve stability.")
-        raise AirflowSkipException("Not enough historical data to reliably calculate drift yet.")
+        logging.info(f"Insufficient active history ({len(df)}/20 rows). Skipping retrain to preserve stability.")
+        sys.exit(0)
         
     hits = 0
     for _, row in df.iterrows():
@@ -64,29 +59,20 @@ def check_drift_and_metrics(logical_date_str: str) -> bool:
         elif decision == 'SELL' and realized_ret < 0:
             hits += 1
 
-
     actionable_win_rate = hits / len(df)
-    print(f"Analysis window setup completed. Target Date: {target_date}")
-    print(f"Evaluated active sample size: {len(df)} trades.")
-    print(f"Calculated Model Actionable Win Rate: {actionable_win_rate * 100:.2f}%")
-
+    logging.info(f"Evaluated active sample size: {len(df)} trades.")
+    logging.info(f"Calculated Model Actionable Win Rate: {actionable_win_rate * 100:.2f}%")
 
     if actionable_win_rate >= 0.45:
-        print("Model performance is within acceptable statistical boundaries. Concept drift not confirmed.")
-        raise AirflowSkipException(f"Skipping weekly retrain. Current Win Rate ({actionable_win_rate*100:.1f}%) is healthy.")
+        logging.info("Model performance is within acceptable statistical boundaries. Concept drift not confirmed.")
+        logging.info(f"Skipping weekly retrain. Current Win Rate ({actionable_win_rate*100:.1f}%) is healthy.")
+        sys.exit(0)
 
-
-    print("CRITICAL: Actionable Win Rate fell below tolerance threshold. Concept Drift confirmed.")
-    print("Proceeding to next task: Recent data extraction for leaf weight adjustment.")
+    logging.warning("CRITICAL: Actionable Win Rate fell below tolerance threshold. Concept Drift confirmed.")
     return True
 
 
 def fetch_and_engineer_recent_data(logical_date_str: str) -> str:
-    """
-    Extracts 18 months of historical data, engineers features with inference=False 
-    to preserve the target variable, and saves the result as a temporary Parquet file 
-    to prevent Airflow XCom database bloat.
-    """
     engine = create_engine(DATABASE_URL)
     target_date = datetime.strptime(logical_date_str, "%Y-%m-%d").date()
     
@@ -108,30 +94,22 @@ def fetch_and_engineer_recent_data(logical_date_str: str) -> str:
     
     engineer = TechnicalFeatureEngineer()
     processed_df = engineer.transform(panel_df, is_inference=False)
-    print("Columns:", processed_df.columns.tolist())
     
     if processed_df.empty:
-        raise ValueError("Feature engineering resulted in an empty dataset. Check null values and target generation.")
+        raise ValueError("Feature engineering resulted in an empty dataset.")
     
     temp_dir = "/tmp/quant_engine_temp"
     os.makedirs(temp_dir, exist_ok=True)
-    
     file_path = os.path.join(temp_dir, "light_train_data.parquet")
     
     processed_df.reset_index(inplace=True)
     processed_df.to_parquet(file_path, index=False)
-    
-    print(f"Engineered training data saved successfully to {file_path}")
-    print(f"Total training shape: {processed_df.shape}")
+    logging.info(f"Engineered training data saved to {file_path}")
     
     return file_path
 
+
 def train_and_evaluate_challenger(data_path: str) -> str:
-    """
-    Loads recent market data, trains a Challenger model using fixed hyperparameters,
-    and evaluates it against the production Champion over a blind 40-day holdout set.
-    Refits and promotes the Challenger only if it achieves a higher Actionable Win Rate.
-    """
     if not os.path.exists(data_path):
         raise FileNotFoundError(f"Training data not found at {data_path}")
         
@@ -139,9 +117,8 @@ def train_and_evaluate_challenger(data_path: str) -> str:
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
 
-    model_dir = "/opt/airflow/quant_engine/models/etf/production"
-    champion_path = os.path.join(model_dir, "etf_baseline_1.joblib")
-    config_path = os.path.join(model_dir, "quant_config.json")
+    champion_path = os.path.join(MODEL_DIR, "etf_baseline_1.joblib")
+    config_path = os.path.join(MODEL_DIR, "quant_config.json")
 
     champion_model = joblib.load(champion_path)
     with open(config_path, "r") as f:
@@ -150,10 +127,8 @@ def train_and_evaluate_challenger(data_path: str) -> str:
     req_features = config.get('req_features')
     bull_limit = config.get('bull_limit')
     bear_limit = config.get('bear_limit')
-    
     buy_thresh = config.get('buy_threshold')
     sell_thresh = config.get('sell_threshold')
-    
     lgb_params = config.get('lgb_params')
     
     if 'class_weight' in lgb_params and lgb_params['class_weight']:
@@ -166,7 +141,7 @@ def train_and_evaluate_challenger(data_path: str) -> str:
 
     unique_dates = df['date'].unique()
     if len(unique_dates) < 100:
-        raise ValueError("Not enough historical data to perform a robust Train/Test split.")
+        raise ValueError("Not enough historical data for Train/Test split.")
 
     cutoff_date = unique_dates[-40]
     train_df = df[df['date'] < cutoff_date]
@@ -174,11 +149,10 @@ def train_and_evaluate_challenger(data_path: str) -> str:
 
     X_train = train_df[req_features]
     y_train = train_df['target_class']
-    
     X_test = test_df[req_features]
     y_test = test_df['target_class']
 
-    print(f"Training Challenger on {len(X_train)} samples...")
+    logging.info(f"Training Challenger on {len(X_train)} samples.")
     challenger_model = lgb.LGBMClassifier(**lgb_params)
     challenger_model.fit(X_train, y_train)
 
@@ -186,26 +160,18 @@ def train_and_evaluate_challenger(data_path: str) -> str:
         probs = model.predict_proba(X)
         idx_sell = np.where(model.classes_ == -1)[0][0]
         idx_buy = np.where(model.classes_ == 1)[0][0]
-
-        actionable_preds = []
-        actionable_trues = []
+        actionable_preds, actionable_trues = [], []
 
         for i in range(len(probs)):
-            prob_buy = probs[i][idx_buy]
-            prob_sell = probs[i][idx_sell]
-
-            if prob_buy >= buy_thresh:
+            if probs[i][idx_buy] >= buy_thresh:
                 actionable_preds.append(1)
                 actionable_trues.append(y_true.iloc[i])
-            elif prob_sell >= sell_thresh:
+            elif probs[i][idx_sell] >= sell_thresh:
                 actionable_preds.append(-1)
                 actionable_trues.append(y_true.iloc[i])
 
-        if len(actionable_preds) == 0:
-            return 0.0
-            
-        correct = np.sum(np.array(actionable_preds) == np.array(actionable_trues))
-        return correct / len(actionable_preds)
+        if len(actionable_preds) == 0: return 0.0
+        return np.sum(np.array(actionable_preds) == np.array(actionable_trues)) / len(actionable_preds)
 
     champ_acc = get_actionable_accuracy(champion_model, X_test, y_test)
     chall_acc = get_actionable_accuracy(challenger_model, X_test, y_test)
@@ -217,27 +183,28 @@ def train_and_evaluate_challenger(data_path: str) -> str:
         mlflow.log_metric("champion_accuracy", champ_acc)
         mlflow.log_metric("challenger_accuracy", chall_acc)
         
-        features_summary = df[req_features].describe().to_markdown()
-        mlflow.log_text(features_summary, "data_health/training_dataset_distribution.md")
-        
-        print(f"Champion Actionable Accuracy: {champ_acc:.2%}")
-        print(f"Challenger Actionable Accuracy: {chall_acc:.2%}")
+        logging.info(f"Champion Actionable Accuracy: {champ_acc:.2%}")
+        logging.info(f"Challenger Actionable Accuracy: {chall_acc:.2%}")
 
         if chall_acc > champ_acc:
-            print("Verdict: CHALLENGER WINS. Refitting on 100% of data...")
-            
-            X_full = df[req_features]
-            y_full = df['target_class']
+            logging.info("Verdict: CHALLENGER WINS. Refitting on 100% of data.")
+            X_full, y_full = df[req_features], df['target_class']
             final_model = lgb.LGBMClassifier(**lgb_params)
             final_model.fit(X_full, y_full)
             joblib.dump(final_model, champion_path)
             mlflow.log_param("promoted", True)
-            
             os.remove(data_path)
-            
             return f"PROMOTED - New baseline saved at {champion_path}"
         else:
-            print("Verdict: CHAMPION WINS or TIES. Challenger discarded.")
+            logging.info("Verdict: CHAMPION WINS or TIES. Challenger discarded.")
             mlflow.log_param("promoted", False)
             os.remove(data_path)
-            raise AirflowSkipException("Challenger failed to beat Champion. Old weights retained.")
+            logging.info("Challenger failed to beat Champion. Old weights retained.")
+            sys.exit(0)
+if __name__ == "__main__":
+    execution_date = datetime.utcnow().strftime("%Y-%m-%d")
+    logging.info(f"Starting Light Retrain Pipeline for {execution_date}.")
+    check_drift_and_metrics(execution_date)
+    data_path = fetch_and_engineer_recent_data(execution_date)
+    result = train_and_evaluate_challenger(data_path)
+    logging.info(result)
