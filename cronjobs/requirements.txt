@@ -1,0 +1,12 @@
+yfinance
+pandas
+numpy
+sqlalchemy
+psycopg2-binary
+pinecone
+sentence-transformers
+google-genai
+joblib
+shap
+mlflow
+lightgbm
