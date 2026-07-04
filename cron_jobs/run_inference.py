@@ -13,8 +13,16 @@ import joblib
 import shap
 import mlflow
 from typing import List, Dict, Any
-
 from features.feature_engineering import TechnicalFeatureEngineer
+import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+
+sys.path.append(PROJECT_ROOT)
+sys.path.append(os.path.join(PROJECT_ROOT, "quant_engine"))
+
+MODEL_DIR = os.path.join(PROJECT_ROOT, "quant_engine", "models", "etf", "core", "features", "targets")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -23,9 +31,6 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, "models", "etf", "production")
 
 
 def reconcile_yesterday_predictions(logical_date_str: str) -> str:
