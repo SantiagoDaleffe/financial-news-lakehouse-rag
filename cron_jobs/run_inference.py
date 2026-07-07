@@ -22,7 +22,7 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.append(PROJECT_ROOT)
 sys.path.append(os.path.join(PROJECT_ROOT, "quant_engine"))
 
-MODEL_DIR = os.path.join(PROJECT_ROOT, "quant_engine", "models", "etf", "core", "features", "targets")
+MODEL_DIR = os.path.join(PROJECT_ROOT, "quant_engine", "models", "etf", "production")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -34,6 +34,20 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 
 def reconcile_yesterday_predictions(logical_date_str: str) -> str:
+    """
+    Closes the loop on previous predictions by comparing them against actual market data.
+    
+    Queries the database for 'PENDING' predictions, fetches the actual closing price 
+    for the target date, calculates the realized log return, and determines the true 
+    class label. Updates the database and logs aggregate performance metrics to MLflow 
+    for continuous model monitoring (MLOps).
+
+    Args:
+        logical_date_str (str): The current execution date (YYYY-MM-DD).
+
+    Returns:
+        str: A summary message indicating the number of reconciled records.
+    """
     engine = create_engine(DATABASE_URL)
     target_date = datetime.strptime(logical_date_str, "%Y-%m-%d").date()
     
@@ -56,6 +70,9 @@ def reconcile_yesterday_predictions(logical_date_str: str) -> str:
     mlflow.set_experiment("Price_Predict_Monitoring")
     
     reconciled_count = 0
+    actionable_trades = 0
+    hits = 0
+    cumulative_return = 0.0
     
     with mlflow.start_run(run_name=f"Reconciliation_{target_date}"):
         for _, row in df_pending.iterrows():
@@ -90,10 +107,16 @@ def reconcile_yesterday_predictions(logical_date_str: str) -> str:
                 true_label = "HOLD"
                 
             llm_verdict = row['llm_verdict']
-            is_correct = 1 if llm_verdict == true_label else 0
             
-            mlflow.log_metric(f"{ticker}_live_accuracy", is_correct)
-            mlflow.log_metric(f"{ticker}_realized_return", float(log_return))
+            # Aggregate metrics calculation for MLflow
+            if llm_verdict in ["BUY", "SELL"]:
+                actionable_trades += 1
+                if llm_verdict == true_label:
+                    hits += 1
+                
+                # Directional return calculation
+                trade_return = log_return if llm_verdict == "BUY" else -log_return
+                cumulative_return += trade_return
             
             with engine.begin() as conn:
                 update_cmd = text("""
@@ -110,11 +133,28 @@ def reconcile_yesterday_predictions(logical_date_str: str) -> str:
                 })
                 
             reconciled_count += 1
+
+        # Log daily health metrics to MLflow Dashboard
+        if actionable_trades > 0:
+            mlflow.log_metric("daily_actionable_win_rate", hits / actionable_trades)
+            mlflow.log_metric("daily_avg_realized_return", float(cumulative_return / actionable_trades))
+            mlflow.log_metric("daily_actionable_volume", actionable_trades)
             
     return f"Successfully reconciled {reconciled_count} past assets as of {target_date}."
 
 
 def build_features(logical_date_str: str) -> List[Dict[str, Any]]:
+    """
+    Extracts the most recent market data block and applies the TechnicalFeatureEngineer 
+    pipeline in inference mode.
+
+    Args:
+        logical_date_str (str): The current execution date (YYYY-MM-DD).
+
+    Returns:
+        List[Dict[str, Any]]: A list of dictionaries representing the engineered 
+        cross-sectional features for the target date.
+    """
     engine = create_engine(DATABASE_URL)
     target_date = datetime.strptime(logical_date_str, "%Y-%m-%d").date()
     
@@ -149,6 +189,23 @@ def build_features(logical_date_str: str) -> List[Dict[str, Any]]:
 
 
 def run_quant_model(daily_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Executes the quantitative LightGBM model to generate base predictions.
+    
+    Calculates probability distributions, defines conviction zones based on dynamic 
+    thresholds, and utilizes SHAP (SHapley Additive exPlanations) to extract the 
+    top mathematical drivers behind each prediction for LLM interpretability.
+
+    Args:
+        daily_data (List[Dict[str, Any]]): Engineered features for the current cross-section.
+
+    Raises:
+        ValueError: If essential features contain NaNs.
+
+    Returns:
+        List[Dict[str, Any]]: A list of preliminary quantitative signals containing 
+        probabilities, conviction zones, and SHAP drivers.
+    """
     if not daily_data: 
         return []
     
@@ -240,6 +297,20 @@ def run_quant_model(daily_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def fetch_news_context(signals: List[Dict[str, Any]], logical_date_str: str) -> List[Dict[str, Any]]:
+    """
+    Performs similarity search in the Pinecone Vector Store to retrieve relevant 
+    macroeconomic context for active signals. 
+    
+    Skips retrieval for assets in the 'COLD' conviction zone to optimize API usage 
+    and reduce context window pollution.
+
+    Args:
+        signals (List[Dict[str, Any]]): The preliminary quantitative signals.
+        logical_date_str (str): The current execution date (YYYY-MM-DD).
+
+    Returns:
+        List[Dict[str, Any]]: Signals enriched with unstructured textual context and FinBERT metadata.
+    """
     if not signals: 
         return []
     
@@ -320,6 +391,17 @@ def fetch_news_context(signals: List[Dict[str, Any]], logical_date_str: str) -> 
 
 
 def evaluate_signals_and_persist(enriched_signals: List[Dict[str, Any]], logical_date_str: str) -> None:
+    """
+    Executes the neurosymbolic architecture by passing the Quantitative signals, 
+    SHAP drivers, and RAG context to the LLM (Gemini) for final risk assessment.
+    
+    Implements hard-coded execution rules to prevent hallucinations. Persists 
+    the final verdict in PostgreSQL and logs the audit trail (Markdown) to MLflow.
+
+    Args:
+        enriched_signals (List[Dict[str, Any]]): Signals enriched with RAG context.
+        logical_date_str (str): The current execution date (YYYY-MM-DD).
+    """
     if not enriched_signals: 
         return
         
@@ -434,6 +516,7 @@ def evaluate_signals_and_persist(enriched_signals: List[Dict[str, Any]], logical
                     })
             except Exception as db_e:
                 logging.error(f"DB persistence failed for {sig['ticker']}: {db_e}")
+
 
 if __name__ == "__main__":
     execution_date = datetime.utcnow().strftime("%Y-%m-%d")

@@ -16,12 +16,32 @@ from datetime import datetime
 
 Base = declarative_base()
 
+class Tenant(Base):
+    """
+    Core architecture for B2B2C. Represents an organization, fund, or the default public platform.
+    """
+    __tablename__ = "tenants"
+
+    id = Column(String, primary_key=True, index=True) # e.g., 'public_b2c', 'alpha_fund'
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), index=True, default="public_b2c")
+    email = Column(String, unique=True, index=True)
+    credits = Column(Float, default=100.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 
 class PriceAlert(Base):
     __tablename__ = "price_alerts"
 
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(String, index=True, default="public_b2c")
+    tenant_id = Column(String, ForeignKey("tenants.id"), index=True, default="public_b2c")
     user_id = Column(String, ForeignKey("users.id"), index=True)
     ticker = Column(String, index=True)
     target_price = Column(Float)
@@ -34,7 +54,7 @@ class Conversation(Base):
     __tablename__ = "conversation"
 
     id = Column(Integer, primary_key=True, index=True)
-    # tenant_id = Column(String, index=True, default="public_b2c")
+    tenant_id = Column(String, ForeignKey("tenants.id"), index=True, default="public_b2c")
     user_id = Column(String, ForeignKey("users.id"), index=True)
     title = Column(String, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -45,6 +65,7 @@ class Message(Base):
     __tablename__ = "message"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), index=True, default="public_b2c")
     conversation_id = Column(Integer, ForeignKey("conversation.id"), index=True)
     user_id = Column(String, ForeignKey("users.id"), index=True)
     role = Column(String)
@@ -53,24 +74,8 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
 
-class ChatRequest(BaseModel):
-    message: str
-    conversation_id: Optional[int] = None
-    model_override: Optional[str] = None
-
-
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(String, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True)
-    credits = Column(Float, default=100.0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-
 class MarketData(Base):
-    """Save the daily closing price (EOD) for the universe of tickers"""
-
+    """Save the daily closing price (EOD) for the universe of tickers. This is GLOBAL data."""
     __tablename__ = "market_data"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -85,20 +90,20 @@ class MarketData(Base):
 
 
 class PortfolioAccount(Base):
-    """Experimental simulated portfolio"""
-
+    """Experimental simulated portfolio isolated by tenant and user"""
     __tablename__ = "portfolio_accounts"
 
     user_id = Column(String, ForeignKey("users.id"), primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), index=True, default="public_b2c")
     cash_balance = Column(Float, default=100000.0)
 
 
 class PortfolioPosition(Base):
     """Experimental simulated portfolio position for PnL and risk modeling, and backtesting"""
-
     __tablename__ = "portfolio_positions"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), index=True, default="public_b2c")
     user_id = Column(String, ForeignKey("users.id"))
     ticker = Column(String, index=True)
     quantity = Column(Float, default=0.0)
@@ -107,10 +112,10 @@ class PortfolioPosition(Base):
 
 class PortfolioTransaction(Base):
     """Audit log of all transactions in the simulated portfolio"""
-
     __tablename__ = "portfolio_transactions"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), index=True, default="public_b2c")
     user_id = Column(String, ForeignKey("users.id"))
     ticker = Column(String)
     transaction_type = Column(String)  # buy or sell
@@ -121,7 +126,7 @@ class PortfolioTransaction(Base):
 
 
 class PredictionsHistory(Base):
-    
+    """Global Quant Engine tracking. This remains global."""
     __tablename__ = "predictions_history"
 
     id = Column(Integer, primary_key=True, index=True)

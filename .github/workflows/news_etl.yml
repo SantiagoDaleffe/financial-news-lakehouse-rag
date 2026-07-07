@@ -1,8 +1,9 @@
 name: Financial News ETL
 
 on:
-  schedule:
-    - cron: '0 6 * * *'
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 8 * * *'
   workflow_dispatch:
 
 jobs:

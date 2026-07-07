@@ -2,10 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
-from ..models import ChatRequest, Conversation, Message, User
-from ..security import get_current_user
+from ..models import Conversation, Message, User
+from ..schemas import ChatRequest   
+from ..security import get_current_user_and_tenant
 from .alerts import get_db
 from .agent import run_agent_with_history
+from ..schemas import ChatResponse
 
 router = APIRouter(tags=["chat"])
 limiter = Limiter(key_func=get_remote_address)
@@ -19,23 +21,48 @@ MODEL_COSTS = {
 }
 
 
-@router.post("/")
+@router.post("/", response_model=ChatResponse)
 @limiter.limit("5/minute")
 async def chat(
     request: Request,
     chat_request: ChatRequest,
-    user_id: str = Depends(get_current_user),
+    auth_data: dict = Depends(get_current_user_and_tenant),
     db: Session = Depends(get_db),
 ):
+    """Handle a chat request for the current authenticated user.
+
+    This endpoint creates or resumes a conversation, stores the user message,
+    runs the agent with conversation history, stores the AI response, and
+    deducts the request cost from the user's credits.
+
+    Args:
+        request (Request): HTTP request object for rate limiting and context.
+        chat_request (ChatRequest): Payload containing the user message,
+            optional conversation_id, and optional model_override.
+        auth_data (dict, optional): Authentication and tenant data from
+            get_current_user_and_tenant dependency.
+        db (Session, optional): Database session dependency.
+
+    Raises:
+        HTTPException: If the conversation is not found or access is denied.
+        HTTPException: If the user has insufficient credits.
+
+    Returns:
+        dict: Response containing conversation_id, AI response,
+            sources, cache status, model used, and remaining credits.
     """
-    Processes chat messages, maintains conversation history, generates AI responses,
-    and manages user credits.
-    """
-    user = db.query(User).filter(User.id == user_id).first()
+    user_id = auth_data["user_id"]
+    tenant_id = auth_data["tenant_id"]
+
+    user = (
+        db.query(User).filter(User.id == user_id, User.tenant_id == tenant_id).first()
+    )
 
     # DEV
     if not user:
-        user = User(id=user_id, email=f"{user_id}@test.com", credits=100.0)
+        user = User(
+            id=user_id, tenant_id=tenant_id, email=f"{user_id}@test.com", credits=100.0
+        )
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -47,7 +74,9 @@ async def chat(
 
     if not chat_request.conversation_id:
         new_conversation = Conversation(
-            user_id=user_id, title=chat_request.message[:40] + "..."
+            user_id=user_id,
+            tenant_id=tenant_id,
+            title=chat_request.message[:40] + "...",
         )
         db.add(new_conversation)
         db.flush()
@@ -56,15 +85,22 @@ async def chat(
         conversation_id = chat_request.conversation_id
         conversation = (
             db.query(Conversation)
-            .filter(Conversation.id == conversation_id, Conversation.user_id == user_id)
+            .filter(
+                Conversation.id == conversation_id,
+                Conversation.user_id == user_id,
+                Conversation.tenant_id == tenant_id,
+            )
             .first()
         )
         if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+            raise HTTPException(
+                status_code=404, detail="Conversation not found or access denied."
+            )
 
     new_message = Message(
         conversation_id=conversation_id,
         user_id=user_id,
+        tenant_id=tenant_id,
         role="user",
         content=chat_request.message,
     )
@@ -81,7 +117,11 @@ async def chat(
     )
 
     ai_response, sources, is_cached, model_used = await run_agent_with_history(
-        chat_request.message, message_history, user_id, chat_request.model_override
+        chat_request.message,
+        message_history,
+        user_id,
+        tenant_id,
+        chat_request.model_override,
     )
 
     cost = 0.0
@@ -93,6 +133,7 @@ async def chat(
     ai_message = Message(
         conversation_id=conversation_id,
         user_id=user_id,
+        tenant_id=tenant_id,
         role="model",
         content=ai_response,
     )

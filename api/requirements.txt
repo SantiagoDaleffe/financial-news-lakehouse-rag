@@ -14,7 +14,11 @@ yfinance
 psycopg2-binary
 sqlalchemy
 requests
-PyJWT==2.8.0
+PyJWT[crypto]
 python-multipart
 slowapi
 mlflow
+supabase
+pytest
+pytest-asyncio
+httpx

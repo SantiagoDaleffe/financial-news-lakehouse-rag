@@ -1,19 +1,27 @@
 import yfinance as yf
+import re
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from .models import PriceAlert, PortfolioAccount, PortfolioPosition, PortfolioTransaction
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://")
+    
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_live_stock_price(ticker: str, period: str="1d") -> dict:
     """
-    fetches current price and currency for a given stock or crypto
-    args:
-        ticker: market symbol (eg 'AAPL', 'BTC-USD')
-        period: time window (eg '1d', '5d')
+    Fetches real-time pricing and currency data for a specified financial asset.
+
+    Args:
+        ticker (str): The standard market symbol (e.g., 'AAPL', 'BTC-USD').
+        period (str, optional): The temporal window for the query. Defaults to '1d'.
+
+    Returns:
+        dict: A dictionary containing the live price, currency, and ticker status.
     """
     try:
         stock = yf.Ticker(ticker)
@@ -26,25 +34,40 @@ def get_live_stock_price(ticker: str, period: str="1d") -> dict:
 
 def calculate_math(expression: str) -> dict:
     """
-    evaluates exact math calculations and financial operations
-    use this whenever you need to calculate percentages, sums, multiplications etc
-    args:
-        expression: valid python math expression (eg '15.5 * 185 * 1.12')
+    Evaluates exact mathematical operations and financial arithmetic.
+    Utilize this tool strictly for computing percentages, aggregated sums, 
+    position sizing, or risk multiplication required by the user's prompt.
+
+    Args:
+        expression (str): A valid, sanitized Python arithmetic expression (e.g., '15.5 * 185 * 1.12').
+
+    Returns:
+        dict: The exact numeric result of the evaluated expression.
     """
+    clean_expr = expression.replace(" ", "")
+    if not re.match(r'^[\d\+\-\*\/\.\(\)]+$', clean_expr):
+        return {"error": "Security Block: Invalid characters. Only pure math operations are allowed."}
+    
     try:
-        result = eval(expression, {"__builtins__": None}, {})
+        result = eval(clean_expr, {"__builtins__": {}}, {})
         return {"result": str(result), "expression": expression}
     except Exception as e:
-        return {"error": f"math error: {str(e)}"}
+        return {"error": f"Arithmetic parsing failure: {str(e)}"}
     
 def set_price_alert(ticker: str, target_price: float, condition: str, user_id: str = "default_user", tenant_id: str = "public_b2c") -> dict:
     """
-    saves a price alert in the database to notify the user later
-    use this whenever the user asks to be notified or alerted about a price
-    args:
-        ticker: market symbol (eg 'AAPL', 'BTC-USD')
-        target_price: target number
-        condition: 'above' if waiting for price to go up, 'below' if waiting for drop
+    Provisions a background price monitoring alert for the user.
+    Invoke this tool explicitly when the user requests to be notified about an asset reaching a specific price.
+
+    Args:
+        ticker (str): The target market symbol (e.g., 'AAPL').
+        target_price (float): The numeric price threshold in USD.
+        condition (str): Must be strictly 'above' (bullish trigger) or 'below' (bearish trigger).
+        user_id (str): The unique identifier of the requesting user.
+        tenant_id (str): The multi-tenant identifier.
+
+    Returns:
+        dict: Status message confirming the successful persistence of the alert.
     """
     db = SessionLocal()
     try:
@@ -53,29 +76,34 @@ def set_price_alert(ticker: str, target_price: float, condition: str, user_id: s
             user_id=user_id, 
             ticker=ticker.upper(), 
             target_price=float(target_price), 
-            condition=condition
+            condition=condition.lower()
         )
         db.add(new_alert)
         db.commit()
-        return {"message": f"alert saved. system will notify when {ticker} goes {condition} {target_price} usd"}
+        return {"message": f"Alert persisted. System will monitor {ticker.upper()} for condition: {condition} {target_price} USD."}
     except Exception as e:
         db.rollback()
-        return {"error": f"db error saving alert: {str(e)}"}
+        return {"error": f"Database failure during alert creation: {str(e)}"}
     finally:
         db.close()
         
-def get_user_alerts(user_id: str) -> dict:
+def get_user_alerts(user_id: str, tenant_id: str) -> dict:
     """
     Fetches all active price alerts for the current user.
     Use this to see what alerts the user has before modifying or deleting them.
     args:
         user_id: the ID of the current user
+        tenant_id: the multi-tenant identifier
+        
+    Returns:
+        dict: A list of active alerts with their details or a message if none exist.
     """
     db = SessionLocal()
     try:
         alerts = db.query(PriceAlert).filter(
             PriceAlert.user_id == user_id,
-            PriceAlert.status == "active"
+            PriceAlert.status == "active",
+            PriceAlert.tenant_id == tenant_id
         ).all()
         
         if not alerts:
@@ -92,19 +120,24 @@ def get_user_alerts(user_id: str) -> dict:
     finally:
         db.close()
 
-def update_price_alert(alert_id: int, new_target_price: float, user_id: str) -> dict:
+def update_price_alert(alert_id: int, new_target_price: float, user_id: str, tenant_id: str) -> dict:
     """
     Updates the target price of an existing alert.
     args:
         alert_id: the ID of the alert to modify
         new_target_price: the new numeric price target
         user_id: the ID of the current user
+        tenant_id: the multi-tenant identifier
+        
+    Returns:
+        dict: Status message confirming the successful update or an error if the alert doesn't exist.
     """
     db = SessionLocal()
     try:
         alert = db.query(PriceAlert).filter(
             PriceAlert.id == alert_id,
             PriceAlert.user_id == user_id,
+            PriceAlert.tenant_id == tenant_id,
             PriceAlert.status == "active"
         ).first()
         
@@ -120,18 +153,23 @@ def update_price_alert(alert_id: int, new_target_price: float, user_id: str) -> 
     finally:
         db.close()
 
-def delete_price_alert(alert_id: int, user_id: str) -> dict:
+def delete_price_alert(alert_id: int, user_id: str, tenant_id: str) -> dict:
     """
     Cancels/deletes an active price alert.
     args:
         alert_id: the ID of the alert to delete
         user_id: the ID of the current user
+        tenant_id: the multi-tenant identifier
+        
+    Returns:
+        dict: Status message confirming the successful cancellation or an error if the alert doesn't exist.
     """
     db = SessionLocal()
     try:
         alert = db.query(PriceAlert).filter(
             PriceAlert.id == alert_id,
-            PriceAlert.user_id == user_id
+            PriceAlert.user_id == user_id,
+            PriceAlert.tenant_id == tenant_id
         ).first()
         
         if not alert:
@@ -146,25 +184,32 @@ def delete_price_alert(alert_id: int, user_id: str) -> dict:
     finally:
         db.close()
         
-def get_portfolio_status(user_id: str) -> dict:
+def get_portfolio_status(user_id: str, tenant_id: str) -> dict:
     """
     Fetches the user's current paper trading portfolio, including cash balance and active stock positions.
     Use this whenever the user asks about their balance, what they own, or how their investments are doing.
     args:
         user_id: the ID of the current user
+        tenant_id: the multi-tenant identifier
+        
+    returns:
+        dict: A summary of the user's cash balance and a list of active positions with their details
     """
     db = SessionLocal()
     try:
-
-        account = db.query(PortfolioAccount).filter(PortfolioAccount.user_id == user_id).first()
+        account = db.query(PortfolioAccount).filter(
+            PortfolioAccount.user_id == user_id,
+            PortfolioAccount.tenant_id == tenant_id
+        ).first()
+        
         if not account:
-            account = PortfolioAccount(user_id=user_id, cash_balance=100000.0)
+            account = PortfolioAccount(user_id=user_id, tenant_id=tenant_id, cash_balance=100000.0)
             db.add(account)
             db.commit()
-            
 
         positions = db.query(PortfolioPosition).filter(
             PortfolioPosition.user_id == user_id, 
+            PortfolioPosition.tenant_id == tenant_id,
             PortfolioPosition.quantity > 0
         ).all()
         
@@ -185,53 +230,62 @@ def get_portfolio_status(user_id: str) -> dict:
     finally:
         db.close()
 
-def execute_paper_trade(ticker: str, action: str, quantity: float, user_id: str) -> dict:
+def execute_paper_trade(ticker: str, action: str, quantity: float, user_id: str, tenant_id: str) -> dict:
     """
-    Executes a simulated buy or sell order in the paper trading environment.
-    Use this strictly when the user explicitly asks to buy or sell an asset.
-    args:
-        ticker: market symbol (eg 'AAPL', 'BTC-USD')
-        action: strictly 'BUY' or 'SELL'
-        quantity: numeric amount of shares/coins to trade
-        user_id: the ID of the current user
+    Executes a simulated transaction (Buy/Sell) within the user's paper trading portfolio.
+    Invoke this tool ONLY when the user explicitly issues a trade execution command.
+
+    Args:
+        ticker (str): The target market symbol (e.g., 'TSLA').
+        action (str): The execution directive, strictly 'BUY' or 'SELL'.
+        quantity (float): The exact numeric amount of shares/coins to transact.
+        user_id (str): The unique identifier of the executing user.
+        tenant_id (str): The multi-tenant identifier.
+
+    Returns:
+        dict: A comprehensive trade receipt detailing execution price, total value, and remaining balance.
     """
     action = action.upper()
     if action not in ["BUY", "SELL"]:
-        return {"error": "action must be exactly BUY or SELL"}
+        return {"error": "Invalid directive. Action must be exactly 'BUY' or 'SELL'."}
     if float(quantity) <= 0:
-        return {"error": "quantity must be greater than 0"}
+        return {"error": "Invalid volume. Quantity must be strictly greater than 0."}
 
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not current_price:
-            return {"error": f"could not fetch live market price for {ticker}. market might be closed."}
+            return {"error": f"Market data unavailable for {ticker}. The exchange might be closed."}
     except Exception as e:
-        return {"error": f"error fetching live price: {str(e)}"}
+        return {"error": f"Live telemetry failure: {str(e)}"}
 
     total_amount = float(quantity) * float(current_price)
-
     db = SessionLocal()
+    
     try:
-        account = db.query(PortfolioAccount).filter(PortfolioAccount.user_id == user_id).first()
+        account = db.query(PortfolioAccount).filter(
+            PortfolioAccount.user_id == user_id,
+            PortfolioAccount.tenant_id == tenant_id
+        ).first()
+        
         if not account:
-            account = PortfolioAccount(user_id=user_id, cash_balance=100000.0)
+            account = PortfolioAccount(user_id=user_id, tenant_id=tenant_id, cash_balance=100000.0)
             db.add(account)
             
         position = db.query(PortfolioPosition).filter(
             PortfolioPosition.user_id == user_id,
+            PortfolioPosition.tenant_id == tenant_id,
             PortfolioPosition.ticker == ticker.upper()
         ).first()
 
         if action == "BUY":
             if account.cash_balance < total_amount:
-                return {"error": f"insufficient funds. need {total_amount:.2f} USD, have {account.cash_balance:.2f} USD."}
+                return {"error": f"Insufficient liquidity. Required: {total_amount:.2f} USD, Available: {account.cash_balance:.2f} USD."}
             
             account.cash_balance -= total_amount
             
             if position:
-
                 total_cost_before = position.quantity * position.average_buy_price
                 total_cost_new = total_cost_before + total_amount
                 new_quantity = position.quantity + float(quantity)
@@ -241,6 +295,7 @@ def execute_paper_trade(ticker: str, action: str, quantity: float, user_id: str)
             else:
                 new_pos = PortfolioPosition(
                     user_id=user_id,
+                    tenant_id=tenant_id,
                     ticker=ticker.upper(),
                     quantity=float(quantity),
                     average_buy_price=current_price
@@ -250,19 +305,17 @@ def execute_paper_trade(ticker: str, action: str, quantity: float, user_id: str)
         elif action == "SELL":
             if not position or position.quantity < float(quantity):
                 current_qty = position.quantity if position else 0
-                return {"error": f"insufficient shares. trying to sell {quantity}, but you only own {current_qty}."}
+                return {"error": f"Insufficient position size. Attempted to sell {quantity}, but holdings are {current_qty}."}
             
-
             account.cash_balance += total_amount
-
             position.quantity -= float(quantity)
             
-
             if position.quantity == 0:
                 db.delete(position)
 
         transaction = PortfolioTransaction(
             user_id=user_id,
+            tenant_id=tenant_id,
             ticker=ticker.upper(),
             transaction_type=action,
             quantity=float(quantity),
@@ -270,17 +323,17 @@ def execute_paper_trade(ticker: str, action: str, quantity: float, user_id: str)
             total_amount=total_amount
         )
         db.add(transaction)
-
         db.commit()
+        
         return {
             "status": "success",
-            "message": f"Successfully executed {action} for {quantity} shares of {ticker} at {current_price:.2f} USD per unit.",
+            "message": f"Order Executed: {action} {quantity} units of {ticker} at {current_price:.2f} USD.",
             "total_transaction_value": total_amount,
             "remaining_cash_balance": account.cash_balance
         }
 
     except Exception as e:
         db.rollback()
-        return {"error": f"database error executing trade: {str(e)}"}
+        return {"error": f"Database transaction aborted: {str(e)}"}
     finally:
         db.close()

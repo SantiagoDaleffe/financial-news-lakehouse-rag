@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 import os
 from dotenv import load_dotenv
-from .models import Base
-from .routers import ingestion, agent, system, alerts, research, chats
+from .models import Base, Tenant
+from .routers import ingestion, agent, system, alerts, research, chats, auth
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -17,6 +18,21 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 Base.metadata.create_all(bind=engine)
+
+def seed_tenants(): 
+    with Session(engine) as db:
+        try:
+            if not db.query(Tenant).filter(Tenant.id == "public_b2c").first():
+                db.add(Tenant(id="public_b2c", name="Public B2C Tenant"))
+            if not db.query(Tenant).filter(Tenant.id == "admin").first():
+                db.add(Tenant(id="admin", name="Admin_tenant"))
+            db.commit()
+            print("Tenants initialized.", flush=True)
+        except Exception as e:
+            db.rollback()
+            print(f"Error initializing tenants: {e}", flush=True)
+
+seed_tenants()
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -70,6 +86,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(system.router)
+app.include_router(auth.router, prefix="/api/v1/auth")
 app.include_router(ingestion.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(alerts.router, prefix="/api/v1/alerts")

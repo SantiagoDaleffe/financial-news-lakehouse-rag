@@ -11,7 +11,9 @@ services:
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS}
 
   api:
-    build: ./api
+    build: 
+      context: .
+      dockerfile: api/Dockerfile
     ports:
       - "8000:8000"
     depends_on:
@@ -20,6 +22,7 @@ services:
       minio:
         condition: service_started
     environment:
+      - PYTHONPATH=/app
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
@@ -33,14 +36,20 @@ services:
       - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
       - MLFLOW_TRACKING_USERNAME=${MLFLOW_TRACKING_USERNAME}
       - MLFLOW_TRACKING_PASSWORD=${MLFLOW_TRACKING_PASSWORD}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
 
   alert-worker:
-    build: ./api
+    build: 
+      context: .
+      dockerfile: api/Dockerfile
     command: python app/alert_worker.py
     dns:
       - 8.8.8.8
       - 8.8.4.4
     environment:
+      - PYTHONUNBUFFERED=1
       - DATABASE_URL=${DATABASE_URL}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
@@ -48,7 +57,9 @@ services:
       - "api.telegram.org:149.154.166.110"
 
   worker:
-    build: ./worker
+    build: 
+      context: .
+      dockerfile: worker/Dockerfile
     depends_on:
       - rabbitmq
       - minio
@@ -56,6 +67,7 @@ services:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
       - PINECONE_API_KEY=${PINECONE_API_KEY}
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
+      - PYTHONPATH=/app
 
   minio:
     image: minio/minio:latest
