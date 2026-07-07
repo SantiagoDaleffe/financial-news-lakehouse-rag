@@ -20,14 +20,16 @@ jobs:
     - name: Build API Image
       uses: docker/build-push-action@v4
       with:
-        context: ./api
+        context: .
+        file: ./api/Dockerfile
         push: false
         tags: genai_api:latest
 
     - name: Build Worker Image
       uses: docker/build-push-action@v4
       with:
-        context: ./worker
+        context: .
+        file: ./worker/Dockerfile
         push: false
         tags: genai_worker:latest
 

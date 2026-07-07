@@ -13,14 +13,13 @@ import joblib
 import shap
 import mlflow
 from typing import List, Dict, Any
-from features.feature_engineering import TechnicalFeatureEngineer
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
 sys.path.append(PROJECT_ROOT)
-sys.path.append(os.path.join(PROJECT_ROOT, "quant_engine"))
+from quant_engine.features.feature_engineering import TechnicalFeatureEngineer
 
 MODEL_DIR = os.path.join(PROJECT_ROOT, "quant_engine", "models", "etf", "production")
 
