@@ -45,6 +45,10 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: write
     
     steps:
       - name: Checkout repository
