@@ -30,9 +30,9 @@ jobs:
         env:
           PYTHONPATH: ./api:.
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-          PINECONE_INDEX_NAME: "dummy_index"
-          GEMINI_API_KEY: "dummy_gemini_key"
-          DATABASE_URL: "sqlite:///:memory:"
+          PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           RABBITMQ_URL: "amqp://guest:guest@localhost:5672/"
           S3_BUCKET_NAME: "dummy_bucket"
           S3_ENDPOINT_URL: "http://localhost:9000"
