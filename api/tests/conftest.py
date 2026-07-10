@@ -47,18 +47,16 @@ app.dependency_overrides[get_current_user_and_tenant] = (
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_database():
-    """Se ejecuta ANTES de cada test individual"""
+    """Set up the test database before each test."""
     Base.metadata.create_all(bind=engine)
     
-    # Inyectamos el tenant obligatorio para que no salten errores de clave foránea
     db = TestingSessionLocal()
-    db.add(Tenant(id="test_tenant_alpha", name="Fondo de Pruebas"))
+    db.add(Tenant(id="test_tenant_alpha", name="test fund"))
     db.commit()
     db.close()
     
-    yield # Acá el test hace su trabajo
+    yield
     
-    # Se ejecuta DESPUÉS de cada test para limpiar la RAM
     Base.metadata.drop_all(bind=engine)
 
 

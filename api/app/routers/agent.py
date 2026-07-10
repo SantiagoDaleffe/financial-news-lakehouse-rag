@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 import numpy as np
 from pinecone import Pinecone
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 import os
 import time
 import mlflow
@@ -33,6 +33,9 @@ index = pinecone.Index(os.getenv("PINECONE_INDEX_NAME"))
 print("loading sentence transformer model...", flush=True)
 model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 cache = SemanticCache(pinecone, model)
+
+print("Loading cross-encoder reranker model...", flush=True)
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 COMPLEX_PROTOTYPES = [
     "do a comparative analysis",
@@ -86,7 +89,6 @@ def get_routing_complexity(query: str) -> str:
     return "complex" if complex_score > simple_score else "simple"
 
 
-# Agregamos tenant_id a la firma de la función
 async def run_agent_with_history(
     query: str,
     message_history,
@@ -94,19 +96,18 @@ async def run_agent_with_history(
     tenant_id: str,
     model_override: str = None,
 ):
-    """Run the financial agent with conversation history and tenant context.
+    """Run the conversational agent with optional historical context.
 
     Args:
-        query (str): The user's current question or instruction.
-        message_history: A list of previous chat messages for conversation context.
-        user_id (str): The identifier for the current user.
-        tenant_id (str): The identifier for the tenant or organization.
-        model_override (str, optional): If provided, forces use of the specified model.
-            Defaults to None.
+        query (str): The current user query to process.
+        message_history (list|dict): The prior conversation history used to maintain context.
+        user_id (str): The identifier for the requesting user.
+        tenant_id (str): The identifier for the tenant or workspace.
+        model_override (str, optional): Optional model name to use instead of the default. Defaults to None.
 
     Returns:
-        tuple: A tuple containing the selected response, the tool call list,
-            a boolean indicating if the response was from cache, and a string
+        tuple: A tuple containing the agent response or cached response, the updated message history,
+            a boolean indicating whether the response was retrieved from cache, and a string
             indicating the response source.
     """
     is_cached = False
@@ -141,35 +142,45 @@ async def run_agent_with_history(
     embedding = model.encode(query).tolist()
 
     global_results = index.query(
-        vector=embedding, 
-        top_k=3, 
-        include_metadata=True,
-        namespace="fin_news_v1"
-    )
-    
-    tenant_results = index.query(
-        vector=embedding,
-        top_k=3,
-        include_metadata=True,
-        namespace=f"tenant_{tenant_id}"
+        vector=embedding, top_k=10, include_metadata=True, namespace="fin_news_v1"
     )
 
-    matches = global_results.get("matches", []) + tenant_results.get("matches", [])
+    tenant_results = index.query(
+        vector=embedding,
+        top_k=10,
+        include_metadata=True,
+        namespace=f"tenant_{tenant_id}",
+    )
+
+    all_matches = global_results.get("matches", []) + tenant_results.get("matches", [])
+    unique_matches = {}
+    for m in all_matches:
+        if m["id"] not in unique_matches:
+            unique_matches[m["id"]] = {
+                "id": m["id"],
+                "text": m["metadata"]["text"],
+                "sentiment": m["metadata"].get("sentiment", "unknown"),
+                "sentiment_score": m["metadata"].get("sentiment_score", 0.0),
+            }
+    matches = list(unique_matches.values())
+
+    if matches:
+        rerank_inputs = [(query, m["text"]) for m in matches]
+        rerank_scores = reranker.predict(rerank_inputs)
+
+        for idx, m in enumerate(matches):
+            m["rerank_score"] = float(rerank_scores[idx])
+
+        matches = sorted(matches, key=lambda x: x["rerank_score"], reverse=True)
+        matches = matches[:4]
 
     if not matches:
         context = "No recent news found in the local database."
         sources_data = []
     else:
-        documents = [m["metadata"]["text"] for m in matches]
+        documents = [m["text"] for m in matches]
         context = "\n- ".join(documents)
-        sources_data = [
-            {
-                "text": m.get("metadata", {}).get("text", ""),
-                "sentiment": m.get("metadata", {}).get("sentiment", "unknown"),
-                "sentiment_score": m.get("metadata", {}).get("sentiment_score", 0.0),
-            }
-            for m in matches
-        ]
+        sources_data = matches
 
     enriched_prompt = f"""
     Local Context (News):

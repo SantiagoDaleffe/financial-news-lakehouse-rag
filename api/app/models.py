@@ -99,7 +99,7 @@ class PortfolioAccount(Base):
 
 
 class PortfolioPosition(Base):
-    """Experimental simulated portfolio position for PnL and risk modeling, and backtesting"""
+    """Experimental simulated portfolio position for PnL, risk modeling, and backtesting"""
     __tablename__ = "portfolio_positions"
 
     id = Column(Integer, primary_key=True, index=True)

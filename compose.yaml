@@ -11,18 +11,24 @@ services:
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS}
 
   api:
-    build: 
+    build:
       context: .
       dockerfile: api/Dockerfile
     ports:
       - "8000:8000"
+    working_dir: /app
+    volumes:
+      - ./api:/app
+      - ./cron_jobs:/cron_jobs
+      - ./worker:/worker  
+      - ./quant_engine:/quant_engine
     depends_on:
       rabbitmq:
         condition: service_started
       minio:
         condition: service_started
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
@@ -41,7 +47,7 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
 
   alert-worker:
-    build: 
+    build:
       context: .
       dockerfile: api/Dockerfile
     command: python app/alert_worker.py
@@ -57,7 +63,7 @@ services:
       - "api.telegram.org:149.154.166.110"
 
   worker:
-    build: 
+    build:
       context: .
       dockerfile: worker/Dockerfile
     depends_on:

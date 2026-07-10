@@ -1,4 +1,4 @@
-name: CI Pipeline - Build Check
+name: CI/CD Pipeline - Test & Delivery
 
 on:
   push:
@@ -7,29 +7,60 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-and-test:
+  test:
+    name: Run Pytest Suite
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
-    - name: Build API Image
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        file: ./api/Dockerfile
-        push: false
-        tags: genai_api:latest
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install pytest pytest-asyncio httpx pandas
 
-    - name: Build Worker Image
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        file: ./worker/Dockerfile
-        push: false
-        tags: genai_worker:latest
+      - name: Run Unit & Integration Tests
+        run: python -m pytest api/tests/ -v
 
+  delivery:
+    name: Build and Push Docker Images
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push API Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./api/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/genai_api:latest
+
+      - name: Build and Push Worker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./worker/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/genai_worker:latest

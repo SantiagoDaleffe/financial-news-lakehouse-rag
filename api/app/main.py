@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from fastapi.encoders import jsonable_encoder
 
 load_dotenv()
 
@@ -59,15 +60,14 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(request, exc):
     return JSONResponse(
         status_code=422,
         content={
             "error": True,
             "message": "Data validation error. Please check the input data and try again.",
-            "details": exc.errors(),
-            "code": 422,
-        },
+            "details": jsonable_encoder(exc.errors()) 
+        }
     )
 
 
