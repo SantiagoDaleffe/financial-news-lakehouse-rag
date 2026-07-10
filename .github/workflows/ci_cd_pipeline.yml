@@ -53,6 +53,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set lowercase repository name
+        run: |
+          echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -66,7 +70,7 @@ jobs:
           context: .
           file: ./api/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}/genai_api:latest
+          tags: ghcr.io/${{ env.REPO_LC }}/genai_api:latest
 
       - name: Build and Push Worker Image
         uses: docker/build-push-action@v5
@@ -74,4 +78,5 @@ jobs:
           context: .
           file: ./worker/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}/genai_worker:latest
+          # Usamos la variable en minúsculas del entorno
+          tags: ghcr.io/${{ env.REPO_LC }}/genai_worker:latest
