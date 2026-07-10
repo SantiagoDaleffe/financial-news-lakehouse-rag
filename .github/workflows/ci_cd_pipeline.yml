@@ -27,6 +27,8 @@ jobs:
           pip install pytest pytest-asyncio httpx pandas
 
       - name: Run Unit & Integration Tests
+        env:
+          PYTHONPATH: ./api:.
         run: python -m pytest api/tests/ -v
 
   delivery:
