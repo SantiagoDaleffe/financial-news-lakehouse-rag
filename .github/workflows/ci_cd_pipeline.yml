@@ -29,6 +29,15 @@ jobs:
       - name: Run Unit & Integration Tests
         env:
           PYTHONPATH: ./api:.
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME: "dummy_index"
+          GEMINI_API_KEY: "dummy_gemini_key"
+          DATABASE_URL: "sqlite:///:memory:"
+          RABBITMQ_URL: "amqp://guest:guest@localhost:5672/"
+          S3_BUCKET_NAME: "dummy_bucket"
+          S3_ENDPOINT_URL: "http://localhost:9000"
+          MINIO_ROOT_USER: "dummy_user"
+          MINIO_ROOT_PASSWORD: "dummy_password"
         run: python -m pytest api/tests/ -v
 
   delivery:
