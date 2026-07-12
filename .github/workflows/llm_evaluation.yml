@@ -1,11 +1,13 @@
 name: LLM Intelligence & RAGAS Evaluation
 
 on:
-  push:
-    #paths:
-    #  - 'api/app/prompts/agent_skills.md'
-    #  - 'api/app/routers/agent.py'
-    #  - 'eval/**'
+  workflow_dispatch:
+# on:
+#   push:
+#     paths:
+#       - 'api/app/prompts/agent_skills.md'
+#       - 'api/app/routers/agent.py'
+#       - 'eval/**'
 
 jobs:
   evaluate-agent:
@@ -41,7 +43,10 @@ jobs:
         env:
           PYTHONPATH: .
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          MLFLOW_TRACKING_URI: "http://localhost:5000"
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-          PINECONE_INDEX_NAME: "dummy_index"
+          PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
+          DATABASE_URL: "sqlite:///:memory:"
         run: python eval/evaluate_rag.py

@@ -7,7 +7,7 @@ from .alerts import get_db
 from .agent import run_agent_with_history
 from ..schemas import ChatResponse
 from ..limiter import limiter
-from ..utils.pii_masker import mask_pii
+from ..utils.pii_masking import mask_pii
 
 router = APIRouter(tags=["chat"])
 
