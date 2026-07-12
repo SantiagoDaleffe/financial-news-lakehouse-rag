@@ -2,7 +2,7 @@ name: Daily Quant Inference
 
 on:
   schedule:
-    - cron: '0 22 * * 1-5'
+    - cron: '30 1 * * 2-6'
   workflow_dispatch: 
 
 jobs:

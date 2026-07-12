@@ -1,6 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 from ..models import Conversation, Message, User
 from ..schemas import ChatRequest   
@@ -8,12 +6,15 @@ from ..security import get_current_user_and_tenant
 from .alerts import get_db
 from .agent import run_agent_with_history
 from ..schemas import ChatResponse
+from ..limiter import limiter
+from ..utils.pii_masker import mask_pii
 
 router = APIRouter(tags=["chat"])
-limiter = Limiter(key_func=get_remote_address)
 
 MODEL_COSTS = {
     "gemini-3.5-flash": 2.0,
+    "gemini-3-flash-preview": 2.0,
+    "gemini-2.5-flash": 1.0,
     "gemini-3.1-pro-preview": 5.0,
     "gemini-2.5-pro": 3.0,
     "gemini-3.1-flash-lite": 0.5,
@@ -96,13 +97,16 @@ async def chat(
             raise HTTPException(
                 status_code=404, detail="Conversation not found or access denied."
             )
+            
+    safe_user_message = mask_pii(chat_request.message)
+    has_pii = safe_user_message != chat_request.message
 
     new_message = Message(
         conversation_id=conversation_id,
         user_id=user_id,
         tenant_id=tenant_id,
         role="user",
-        content=chat_request.message,
+        content=safe_user_message,
     )
     db.add(new_message)
     db.flush()
@@ -117,11 +121,12 @@ async def chat(
     )
 
     ai_response, sources, is_cached, model_used = await run_agent_with_history(
-        chat_request.message,
-        message_history,
-        user_id,
-        tenant_id,
-        chat_request.model_override,
+        query=safe_user_message,
+        message_history=message_history,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        model_override=chat_request.model_override,
+        has_pii=has_pii
     )
 
     cost = 0.0

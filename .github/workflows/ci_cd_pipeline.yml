@@ -82,5 +82,4 @@ jobs:
           context: .
           file: ./worker/Dockerfile
           push: true
-          # Usamos la variable en minúsculas del entorno
           tags: ghcr.io/${{ env.REPO_LC }}/genai_worker:latest

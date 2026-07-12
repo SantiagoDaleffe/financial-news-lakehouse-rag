@@ -55,7 +55,6 @@ def parse_articles(articles_list: List[Dict[str, Any]], ticker: str) -> List[Dic
         if not title or title == "[Removed]":
             continue
             
-        # STRICT EDGE FILTERING: Drop articles with no readable text
         if not title or not desc:
             logging.warning(f"Discarded empty article for {ticker}: {article.get('url')}")
             continue

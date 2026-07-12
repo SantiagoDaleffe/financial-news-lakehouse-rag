@@ -1,12 +1,18 @@
 import json
 import os
+import sys
 import time
 import mlflow
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+
 load_dotenv()
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
 
 import socket
 from urllib.parse import urlparse
@@ -62,7 +68,7 @@ Assistant Answer:
 """
 
 async def evaluate_rag():
-    print("Loading RAG dataset...", flush=True)
+    print("Loading RAG dataset.", flush=True)
     dataset_path = os.path.join(os.path.dirname(__file__), "eval_rag_dataset.json")
     with open(dataset_path, "r") as f:
         dataset = json.load(f)
@@ -73,7 +79,7 @@ async def evaluate_rag():
     total_faithfulness = 0.0
     total_relevance = 0.0
 
-    print(f"Starting RAG evaluation with {total_cases} cases. Judge: gemini-3.1-pro-preview\n")
+    print(f"Starting RAG evaluation with {total_cases} cases. Judge: gemini-2.5-flash\n")
 
     with mlflow.start_run(run_name="Baseline_2_RAG_Faithfulness"):
         start_time = time.time()
@@ -86,7 +92,8 @@ async def evaluate_rag():
                 ai_response, sources_data, _, model_used = await run_agent_with_history(
                     query=query, 
                     message_history=[], 
-                    user_id="eval_user", 
+                    user_id="eval_user",
+                    tenant_id="public_b2c",  
                     model_override="gemini-2.5-flash"
                 )
 
@@ -100,7 +107,7 @@ async def evaluate_rag():
                 judge_prompt_filled = LLM_JUDGE_PROMPT.replace("{query}", query).replace("{context}", raw_context).replace("{answer}", ai_response)
                 
                 judge_response = client.models.generate_content(
-                    model='gemini-3.1-pro',
+                    model='gemini-2.5-flash',
                     contents=judge_prompt_filled,
                     config=types.GenerateContentConfig(temperature=0.0, response_mime_type="application/json")
                 )
@@ -144,7 +151,7 @@ async def evaluate_rag():
         mlflow.log_metric("eval_time_seconds", total_time)
         mlflow.log_param("dataset_size", total_cases)
         mlflow.log_param("agent_model", "gemini-2.5-flash")
-        mlflow.log_param("judge_model", "gemini-3.1-pro-preview")
+        mlflow.log_param("judge_model", "gemini-2.5-flash")
         
         with open("rag_eval_results.json", "w") as f:
             json.dump(results_log, f, indent=4)

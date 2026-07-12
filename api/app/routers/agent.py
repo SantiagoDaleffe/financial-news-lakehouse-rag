@@ -95,6 +95,7 @@ async def run_agent_with_history(
     user_id: str,
     tenant_id: str,
     model_override: str = None,
+    has_pii: bool = False
 ):
     """Run the conversational agent with optional historical context.
 
@@ -128,16 +129,13 @@ async def run_agent_with_history(
 
     is_transactional = any(word in query.lower() for word in transactional_keywords)
 
-    if not is_transactional:
+    if not is_transactional and not has_pii:
         cached_response = cache.check(query, threshold=0.15, ttl_seconds=300)
         if cached_response:
             is_cached = True
             return cached_response, [], is_cached, "cache_hit"
     else:
-        print(
-            "Transactional query detected. Avoiding semantic caching for security.",
-            flush=True,
-        )
+        print("Transactional or PII query detected. Bypassing semantic caching.", flush=True)
 
     embedding = model.encode(query).tolist()
 
@@ -200,6 +198,12 @@ async def run_agent_with_history(
             )
         )
 
+    prompt_path = os.path.join(os.path.dirname(__file__), "..", "prompts", "agent_skills.md")
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        base_system_prompt = f.read()
+
+    system_instruction_text = base_system_prompt.format(user_id=user_id, tenant_id=tenant_id)
+
     dynamic_config = types.GenerateContentConfig(
         tools=[
             get_live_stock_price,
@@ -211,30 +215,8 @@ async def run_agent_with_history(
             execute_paper_trade,
             get_portfolio_status,
         ],
-        temperature=0.0,
-        system_instruction=f"""
-    You are an Institutional-Level Quantitative Analyst and Risk Manager. Your objective is to assist the user in financial decisions, manage their simulated portfolio, and analyze the market.
-
-    SYSTEM CONTEXT:
-    - Current user ID: {user_id}
-    - Current tenant ID: {tenant_id}
-    (Use these EXACT IDs whenever a tool requires them).
-
-    STRICT OPERATING RULES:
-    1. Prices and Market: NEVER assume or invent a price. ALWAYS use `get_live_stock_price`.
-    2. News (RAG): Base your fundamental analysis ONLY on the provided local context. If there is no relevant news about a ticker, state this explicitly ("I have no recent news about X"). NEVER invent macroeconomic events.
-    3. Alerts: If the user requests that you alert or notify them about a price, you MUST use `set_price_alert`.
-    4. Math: Use `calculate_math` for any calculations." Percentages, averages, or returns. Don't do mental math.
-
-    INTERNAL REASONING PROCESS (You must follow this order):
-    Step 1 (Intent): Classify whether the user is looking for analysis, wants to set an alert, or wants to execute a trade.
-    Step 2 (Validation): If it's a trade or they're asking to see their account, execute `get_portfolio_status` FIRST.
-    Step 3 (Risk): If a buy order requires more than 50% of their available USD balance, execute the order but clearly warn about the exposure and lack of diversification.
-    Step 4 (Execution): If there isn't enough balance for a trade, bounce the order, mathematically detailing the difference, and suggest buying the maximum amount the balance allows.
-    Step 5 (Synthesis): Deliver your final response in a structured, direct, and professional manner.
-
-    CRITICAL CONSTRAINT: If a tool returns an error, explain it to the user. NEVER simulate or fabricate that a transaction was successful if the tool failed.
-    """,
+        temperature=0.05,
+        system_instruction=system_instruction_text,
     )
 
     if model_override:
@@ -253,6 +235,7 @@ async def run_agent_with_history(
                 "gemini-3-flash-preview",
                 "gemini-3.1-flash-lite",
                 "gemini-2.5-flash-lite",
+                "gemini-2.5-flash",
             ]
 
     print(f"Model chosen: {complexity}. Cascade: {model_cascade}", flush=True)
@@ -282,7 +265,7 @@ async def run_agent_with_history(
         response_text = "Too many requests. Try again later."
         model_used = "failed_all"
 
-    if response_text and model_used != "failed_all" and not is_transactional:
+    if response_text and model_used != "failed_all" and not is_transactional and not has_pii:
         cache.save(query, response_text)
 
     with mlflow.start_run(run_name="chat_with_history", nested=True):

@@ -82,7 +82,7 @@ def reconcile_yesterday_predictions(logical_date_str: str) -> str:
             
             price_query = text("""
                 SELECT close FROM market_data 
-                WHERE ticker = :ticker AND date > :sig_date AND date <= :target_date
+                WHERE ticker = :ticker AND date > :sig_date AND DATE(date) <= :target_date
                 ORDER BY date ASC LIMIT 1
             """)
             with engine.connect() as conn:

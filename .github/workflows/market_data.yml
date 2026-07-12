@@ -2,7 +2,7 @@ name: Market Data ETL
 
 on:
   schedule:
-    - cron: '0 21 * * 1-5'
+    - cron: '0 1 * * 2-6'
   workflow_dispatch:
 
 jobs:

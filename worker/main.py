@@ -105,10 +105,11 @@ def callback(ch, method, properties, body):
             return
 
         try:
-            sent_result = sentiment_model(text[:512])[0]
+            sent_result = sentiment_model(text, truncation=True, max_length=512)[0]
             sentiment_label = sent_result["label"].upper()
             sentiment_score = float(sent_result["score"])
-        except Exception:
+        except Exception as e:
+            print(f"Sentiment analysis failed: {str(e)}", flush=True)
             sentiment_label = "UNKNOWN"
             sentiment_score = 0.0
 
