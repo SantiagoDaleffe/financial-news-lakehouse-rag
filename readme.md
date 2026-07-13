@@ -105,10 +105,6 @@ The agent operates under a strict, hard-coded prompt constitution (`agent_skills
 
 To feed both the Quantitative Engine and the GenAI Agent, the platform requires a massive, continuous influx of clean data. This is managed through a decoupled, event-driven architecture designed to handle high throughput without blocking the main API.
 
-## 4. Event-Driven Data Engineering & Ingestion
-
-To feed both the Quantitative Engine and the GenAI Agent, the platform requires a massive, continuous influx of clean data. This is managed through a decoupled, event-driven architecture designed to handle high throughput without blocking the main API.
-
 ### The Macroeconomic News ETL Pipeline
 News ingestion relies on a robust Producer-Consumer architecture:
 
